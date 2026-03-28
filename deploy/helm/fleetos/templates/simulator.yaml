@@ -1,0 +1,34 @@
+{{- if .Values.simulator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-simulator
+  labels:
+    app: fleetos-simulator
+spec:
+  replicas: {{ .Values.simulator.replicaCount }}
+  selector:
+    matchLabels:
+      app: fleetos-simulator
+  template:
+    metadata:
+      labels:
+        app: fleetos-simulator
+    spec:
+      containers:
+        - name: simulator
+          image: "{{ .Values.simulator.image.repository }}:{{ .Values.simulator.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - "-target"
+            - "{{ .Release.Name }}-ingestion:50051"
+            - "-robots"
+            - "{{ .Values.simulator.robotCount }}"
+          env:
+            - name: SIM_ROBOT_COUNT
+              value: "{{ .Values.simulator.robotCount }}"
+            - name: SIM_TICK_MS
+              value: "{{ .Values.simulator.tickIntervalMs }}"
+          resources:
+            {{- toYaml .Values.simulator.resources | nindent 12 }}
+{{- end }}

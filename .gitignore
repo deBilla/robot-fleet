@@ -1,0 +1,17 @@
+bin/
+processor
+coverage.out
+coverage.html
+*.exe
+.env
+.env.*
+*.pem
+*.key
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate*
+deploy/terraform/.terraform.lock.hcl
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/settings.local.json

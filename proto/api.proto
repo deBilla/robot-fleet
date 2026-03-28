@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package fleetos.api;
+
+option go_package = "github.com/dimuthu/robot-fleet/internal/models";
+
+import "google/protobuf/timestamp.proto";
+import "proto/telemetry.proto";
+
+// Fleet management API (gRPC)
+
+message Robot {
+  string id = 1;
+  string name = 2;
+  string model = 3;
+  string status = 4;
+  fleetos.telemetry.Pose last_pose = 5;
+  double battery_level = 6;
+  google.protobuf.Timestamp last_seen = 7;
+  google.protobuf.Timestamp registered_at = 8;
+  map<string, string> metadata = 9;
+}
+
+message ListRobotsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string status_filter = 3;
+}
+
+message ListRobotsResponse {
+  repeated Robot robots = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message GetRobotRequest {
+  string robot_id = 1;
+}
+
+message SendCommandRequest {
+  string robot_id = 1;
+  fleetos.telemetry.RobotCommand command = 2;
+}
+
+message SendCommandResponse {
+  string command_id = 1;
+  string status = 2;
+}
+
+message GetTelemetryRequest {
+  string robot_id = 1;
+  google.protobuf.Timestamp since = 2;
+  int32 limit = 3;
+}
+
+message GetTelemetryResponse {
+  repeated fleetos.telemetry.TelemetryPacket packets = 1;
+}
+
+message InferenceRequest {
+  bytes image = 1;
+  string instruction = 2;
+  string model_id = 3;
+}
+
+message InferenceResponse {
+  repeated fleetos.telemetry.JointState predicted_joints = 1;
+  double confidence = 2;
+  string model_version = 3;
+  int64 latency_ms = 4;
+}
+
+message FleetMetrics {
+  int32 total_robots = 1;
+  int32 active_robots = 2;
+  int32 idle_robots = 3;
+  int32 error_robots = 4;
+  double avg_battery = 5;
+  int64 telemetry_rate_per_sec = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message FleetMetricsRequest {}
+
+service FleetService {
+  rpc ListRobots(ListRobotsRequest) returns (ListRobotsResponse);
+  rpc GetRobot(GetRobotRequest) returns (Robot);
+  rpc SendCommand(SendCommandRequest) returns (SendCommandResponse);
+  rpc GetTelemetry(GetTelemetryRequest) returns (GetTelemetryResponse);
+  rpc RunInference(InferenceRequest) returns (InferenceResponse);
+  rpc GetFleetMetrics(FleetMetricsRequest) returns (FleetMetrics);
+}

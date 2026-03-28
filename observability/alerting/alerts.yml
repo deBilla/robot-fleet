@@ -1,0 +1,89 @@
+groups:
+  - name: fleetos-fleet
+    rules:
+      - alert: RobotOffline
+        expr: time() - fleetos_robot_last_seen_timestamp > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Robot {{ $labels.robot_id }} has been offline for 5+ minutes"
+          description: "Robot {{ $labels.robot_id }} last reported at {{ $value | humanizeTimestamp }}"
+
+      - alert: RobotBatteryLow
+        expr: fleetos_robot_battery_level < 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Robot {{ $labels.robot_id }} battery critically low ({{ $value | humanizePercentage }})"
+
+      - alert: FleetErrorRateHigh
+        expr: sum(fleetos_robots_error) / sum(fleetos_robots_total) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 10% of fleet is in error state"
+
+  - name: fleetos-api
+    rules:
+      - alert: APIHighLatency
+        expr: histogram_quantile(0.95, rate(fleetos_api_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency exceeds 1 second"
+
+      - alert: APIErrorRateHigh
+        expr: rate(fleetos_api_requests_total{status=~"5.."}[5m]) / rate(fleetos_api_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx error rate exceeds 5%"
+
+      - alert: APIRateLimitHigh
+        expr: rate(fleetos_api_requests_total{status="429"}[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of 429 responses — tenants hitting rate limits"
+
+  - name: fleetos-kafka
+    rules:
+      - alert: KafkaConsumerLagHigh
+        expr: fleetos_kafka_consumer_lag > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka consumer lag exceeds 10k messages"
+
+      - alert: KafkaBrokerDown
+        expr: kafka_brokers < 3
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka cluster has fewer than 3 brokers"
+
+  - name: fleetos-inference
+    rules:
+      - alert: InferenceLatencyHigh
+        expr: histogram_quantile(0.95, rate(fleetos_inference_duration_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Inference p95 latency exceeds 5 seconds"
+
+      - alert: GPUUtilizationLow
+        expr: avg(fleetos_gpu_utilization) < 0.1
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "GPU utilization below 10% for 30+ minutes — consider scaling down"

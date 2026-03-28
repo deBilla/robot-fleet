@@ -1,0 +1,260 @@
+openapi: 3.1.0
+info:
+  title: FleetOS API
+  description: Robot Fleet Management Platform API
+  version: 0.1.0
+  contact:
+    name: FleetOS Team
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.fleetos.dev
+    description: Production
+
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      tags: [System]
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/robots:
+    get:
+      summary: List robots
+      tags: [Robots]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: List of robots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  robots:
+                    type: array
+                    items: { $ref: "#/components/schemas/Robot" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+
+  /api/v1/robots/{id}:
+    get:
+      summary: Get robot by ID
+      tags: [Robots]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Robot details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Robot" }
+        "404":
+          description: Robot not found
+
+  /api/v1/robots/{id}/command:
+    post:
+      summary: Send command to robot
+      tags: [Robots]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [move, joint, stop]
+                params:
+                  type: object
+      responses:
+        "202":
+          description: Command queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  command_id: { type: integer }
+                  status: { type: string }
+                  robot_id: { type: string }
+
+  /api/v1/robots/{id}/telemetry:
+    get:
+      summary: Get latest telemetry for robot
+      tags: [Telemetry]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Latest telemetry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Telemetry" }
+
+  /api/v1/inference:
+    post:
+      summary: Run AI inference
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [image, instruction]
+              properties:
+                image: { type: string, format: byte, description: "Base64 encoded image" }
+                instruction: { type: string, description: "Natural language instruction" }
+                model_id: { type: string, description: "Model ID (optional)" }
+      responses:
+        "200":
+          description: Inference result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InferenceResult" }
+
+  /api/v1/fleet/metrics:
+    get:
+      summary: Get fleet-wide metrics
+      tags: [Fleet]
+      responses:
+        "200":
+          description: Fleet metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FleetMetrics" }
+
+  /api/v1/usage:
+    get:
+      summary: Get API usage for current tenant
+      tags: [Billing]
+      responses:
+        "200":
+          description: Usage stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Usage" }
+
+  /api/v1/ws/telemetry:
+    get:
+      summary: WebSocket telemetry stream
+      tags: [Telemetry]
+      parameters:
+        - name: robot_id
+          in: query
+          schema: { type: string }
+          description: "Filter by robot ID (optional)"
+      responses:
+        "101":
+          description: WebSocket upgrade
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Robot:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        model: { type: string }
+        status: { type: string, enum: [active, idle, charging, error] }
+        pos_x: { type: number }
+        pos_y: { type: number }
+        pos_z: { type: number }
+        battery_level: { type: number, minimum: 0, maximum: 1 }
+        last_seen: { type: string, format: date-time }
+        registered_at: { type: string, format: date-time }
+        tenant_id: { type: string }
+
+    Telemetry:
+      type: object
+      properties:
+        robot_id: { type: string }
+        state:
+          type: object
+          properties:
+            status: { type: string }
+            pos_x: { type: number }
+            pos_y: { type: number }
+            battery_level: { type: number }
+            last_seen: { type: integer }
+        timestamp: { type: string, format: date-time }
+
+    InferenceResult:
+      type: object
+      properties:
+        predicted_joints:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              position: { type: number }
+              velocity: { type: number }
+        confidence: { type: number }
+        model_version: { type: string }
+        latency_ms: { type: integer }
+
+    FleetMetrics:
+      type: object
+      properties:
+        total_robots: { type: integer }
+        active_robots: { type: integer }
+        idle_robots: { type: integer }
+        error_robots: { type: integer }
+        avg_battery: { type: number }
+        timestamp: { type: string, format: date-time }
+
+    Usage:
+      type: object
+      properties:
+        tenant_id: { type: string }
+        date: { type: string }
+        api_calls: { type: integer }
+        inference_calls: { type: integer }

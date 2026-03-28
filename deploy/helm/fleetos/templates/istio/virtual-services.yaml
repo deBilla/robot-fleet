@@ -1,0 +1,69 @@
+{{- if .Values.istio.enabled }}
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-api
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ .Release.Name }}-api
+  http:
+    # Canary routing: split traffic between stable and canary
+    - route:
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: stable
+          weight: {{ sub 100 (int .Values.istio.virtualService.canary.weight) }}
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: canary
+          weight: {{ int .Values.istio.virtualService.canary.weight }}
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: "5xx,reset,connect-failure"
+      timeout: 10s
+    # WebSocket route — no retries, longer timeout
+    - match:
+        - headers:
+            upgrade:
+              exact: websocket
+      route:
+        - destination:
+            host: {{ .Release.Name }}-api
+            subset: stable
+      timeout: 3600s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-ingestion
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ .Release.Name }}-ingestion
+  http:
+    - route:
+        - destination:
+            host: {{ .Release.Name }}-ingestion
+      timeout: 30s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ .Release.Name }}-inference
+  namespace: {{ .Release.Namespace }}
+spec:
+  hosts:
+    - {{ .Release.Name }}-inference
+  http:
+    - route:
+        - destination:
+            host: {{ .Release.Name }}-inference
+      timeout: 10s
+      retries:
+        attempts: 1
+        perTryTimeout: 5s
+        retryOn: "5xx,connect-failure"
+{{- end }}

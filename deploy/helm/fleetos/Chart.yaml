@@ -1,0 +1,11 @@
+apiVersion: v2
+name: fleetos
+description: Robot Fleet Management Platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - robotics
+  - fleet-management
+  - telemetry
+  - ai-inference

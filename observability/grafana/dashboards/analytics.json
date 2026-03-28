@@ -1,0 +1,138 @@
+{
+  "uid": "fleetos-analytics",
+  "title": "FleetOS - Analytics (ClickHouse)",
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Fleet Battery Trend (Hourly)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+      "targets": [{
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+        "queryType": "sql",
+        "rawSql": "SELECT hour, avg_battery FROM fleet_metrics_hourly ORDER BY hour",
+        "refId": "A",
+        "format": 1,
+        "meta": { "builderOptions": { "mode": "list" } }
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "green", "mode": "fixed" },
+          "custom": { "fillOpacity": 15, "lineWidth": 2 },
+          "unit": "percentunit",
+          "min": 0, "max": 1
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Fleet Error Rate (Hourly)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+      "targets": [{
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+        "queryType": "sql",
+        "rawSql": "SELECT hour, error_rate FROM fleet_metrics_hourly ORDER BY hour",
+        "refId": "A",
+        "format": 1
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "custom": { "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "percentunit"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Unique Robots Active (Hourly)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+      "targets": [{
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+        "queryType": "sql",
+        "rawSql": "SELECT hour, unique_robots FROM fleet_metrics_hourly ORDER BY hour",
+        "refId": "A",
+        "format": 1
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Total Telemetry Events (Hourly)",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+      "targets": [{
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+        "queryType": "sql",
+        "rawSql": "SELECT hour, total_events FROM fleet_metrics_hourly ORDER BY hour",
+        "refId": "A",
+        "format": 2
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "purple", "mode": "fixed" }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Per-Robot Battery Level",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+      "targets": [{
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+        "queryType": "sql",
+        "rawSql": "SELECT robot_id, round(avg_battery, 4) as avg_battery, round(min_battery, 4) as min_battery, round(max_battery, 4) as max_battery, total_events, round(error_rate, 4) as error_rate FROM robot_telemetry_hourly ORDER BY robot_id",
+        "refId": "A",
+        "format": 2
+      }]
+    },
+    {
+      "id": 11,
+      "title": "Per-Robot Movement Range",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+      "targets": [{
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+        "queryType": "sql",
+        "rawSql": "SELECT robot_id, round(avg_x, 2) as avg_x, round(avg_y, 2) as avg_y, round(movement_range_x, 2) as range_x, round(movement_range_y, 2) as range_y FROM robot_telemetry_hourly ORDER BY robot_id",
+        "refId": "A",
+        "format": 2
+      }]
+    },
+    {
+      "id": 20,
+      "title": "Anomalies Detected",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+      "targets": [{
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "PDEE91DDB90597936" },
+        "queryType": "sql",
+        "rawSql": "SELECT robot_id, detected_at, round(battery_drop, 4) as battery_drop, round(error_rate, 4) as error_rate, round(position_volatility, 2) as position_volatility FROM robot_anomalies ORDER BY detected_at DESC LIMIT 50",
+        "refId": "A",
+        "format": 2
+      }]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}
