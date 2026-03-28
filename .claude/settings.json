@@ -17,6 +17,13 @@
             "prompt": "The user is about to commit code. Before allowing, check: Does this commit include changes to features, endpoints, services, infrastructure, or architecture that should be reflected in README.md? If the staged changes add new API endpoints, new services, new infrastructure components, or change the architecture, and README.md is NOT in the staged files, BLOCK with message: 'README.md may need updating to reflect these changes. Review README.md and update if needed before committing.' If README.md is already staged, or the changes are minor (bug fixes, refactoring, test-only), ALLOW.",
             "model": "claude-haiku-4-5-20251001",
             "statusMessage": "Checking if README needs updating..."
+          },
+          {
+            "type": "command",
+            "if": "Bash(git commit:*)",
+            "command": "cd /Users/dimuthu/robot-fleet && go build ./... 2>&1 && go test -race -count=1 ./internal/... ./test/... 2>&1 || { echo '{\"decision\":\"block\",\"reason\":\"Build or tests failed. Fix before committing.\"}'; exit 0; }",
+            "timeout": 120,
+            "statusMessage": "Running build + tests before commit..."
           }
         ]
       }

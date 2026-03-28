@@ -17,11 +17,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.26"
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.56
+          version: latest
 
   test:
     runs-on: ubuntu-latest
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.26"
       - name: Run migrations
         run: psql "postgres://fleetos:fleetos@localhost:5432/fleetos?sslmode=disable" -f migrations/001_init.sql
       - name: Run tests
@@ -108,6 +108,7 @@ jobs:
             --set global.environment=staging \
             --set api.image.tag=${{ github.sha }} \
             --set ingestion.image.tag=${{ github.sha }} \
+            --set inference.image.tag=${{ github.sha }} \
             --set simulator.image.tag=${{ github.sha }}
       - name: Run smoke tests
         run: |
