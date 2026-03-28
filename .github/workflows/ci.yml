@@ -8,7 +8,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository }}
 
 jobs:
   lint:
@@ -71,6 +70,8 @@ jobs:
         service: [simulator, ingestion, api, processor, inference]
     steps:
       - uses: actions/checkout@v4
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GHCR
@@ -87,32 +88,7 @@ jobs:
           file: deploy/docker/Dockerfile.${{ matrix.service }}
           push: ${{ github.event_name == 'push' }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  deploy-staging:
-    needs: [build]
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure kubectl
-        uses: azure/setup-kubectl@v3
-      - name: Deploy to staging
-        run: |
-          helm upgrade --install fleetos deploy/helm/fleetos \
-            --namespace fleetos-staging --create-namespace \
-            --set global.environment=staging \
-            --set api.image.tag=${{ github.sha }} \
-            --set ingestion.image.tag=${{ github.sha }} \
-            --set inference.image.tag=${{ github.sha }} \
-            --set simulator.image.tag=${{ github.sha }}
-      - name: Run smoke tests
-        run: |
-          echo "Waiting for rollout..."
-          kubectl rollout status deployment/fleetos-api -n fleetos-staging --timeout=300s
-          curl -sf http://api-staging.fleetos.dev/healthz || exit 1
-          echo "Smoke tests passed"
