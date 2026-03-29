@@ -1,0 +1,292 @@
+version: "3.9"
+
+services:
+  # --- Infrastructure ---
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fleetos
+      POSTGRES_PASSWORD: fleetos
+      POSTGRES_DB: fleetos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleetos"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_OPTS: "-Dzookeeper.4lw.commands.whitelist=ruok,srvr,stat"
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # --- Observability ---
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - clickhouse
+
+  # --- MinIO (S3-compatible object storage) ---
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: fleetos
+      MINIO_ROOT_PASSWORD: fleetos123
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - minio_data:/data
+
+  # --- Temporal (Control Plane) ---
+  temporal:
+    image: temporalio/auto-setup:1.25
+    ports:
+      - "7233:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: fleetos
+      POSTGRES_PWD: fleetos
+      POSTGRES_SEEDS: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    ports:
+      - "8233:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.worker
+    environment:
+      TEMPORAL_HOST_PORT: temporal:7233
+      TEMPORAL_ENABLED: "true"
+      TEMPORAL_NAMESPACE: default
+      POSTGRES_DSN: postgres://fleetos:fleetos@postgres:5432/fleetos?sslmode=disable
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: kafka:29092
+    depends_on:
+      temporal:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Application Services ---
+  ingestion:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.ingestion
+    ports:
+      - "50051:50051"
+    environment:
+      GRPC_PORT: "50051"
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TELEMETRY_TOPIC: robot.telemetry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    ports:
+      - "8080:8080"
+    environment:
+      HTTP_PORT: "8080"
+      POSTGRES_DSN: postgres://fleetos:fleetos@postgres:5432/fleetos?sslmode=disable
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: kafka:29092
+      JWT_SECRET: dev-secret-change-me
+      RATE_LIMIT_RPS: "100"
+      INFERENCE_ENDPOINT: ${INFERENCE_ENDPOINT:-inference:8081}
+      TEMPORAL_HOST_PORT: temporal:7233
+      TEMPORAL_ENABLED: ${TEMPORAL_ENABLED:-false}
+      TEMPORAL_NAMESPACE: default
+      TRAINING_ENABLED: ${TRAINING_ENABLED:-false}
+      TRAINING_IMAGE: fleetos/training:latest
+      TRAINING_NAMESPACE: default
+      TRAINING_CALLBACK_URL: http://api:8080/api/v1/internal
+      S3_ENDPOINT: minio:9000
+      S3_BUCKET: fleetos-models
+      S3_ACCESS_KEY: fleetos
+      S3_SECRET_KEY: fleetos123
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  processor:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.processor
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TELEMETRY_TOPIC: robot.telemetry
+      KAFKA_GROUP_ID: fleetos-processor
+      POSTGRES_DSN: postgres://fleetos:fleetos@postgres:5432/fleetos?sslmode=disable
+      REDIS_ADDR: redis:6379
+      S3_ENDPOINT: minio:9000
+      S3_BUCKET: fleetos-telemetry
+      S3_ACCESS_KEY: fleetos
+      S3_SECRET_KEY: fleetos123
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- ClickHouse (OLAP) ---
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    ports:
+      - "8123:8123"
+      - "9009:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./analytics/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+  # --- Apache Spark (Analytics) ---
+  spark-master:
+    image: apache/spark:3.5.4-python3
+    ports:
+      - "8088:8080"
+      - "7077:7077"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    volumes:
+      - ./analytics:/opt/spark-jobs
+    restart: unless-stopped
+
+  spark-worker:
+    image: apache/spark:3.5.4-python3
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      SPARK_WORKER_MEMORY: 1G
+      SPARK_WORKER_CORES: 2
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+
+  # --- Training image (pre-built for local K8s jobs) ---
+  training-build:
+    build:
+      context: ./training
+      dockerfile: Dockerfile
+    image: fleetos/training:latest
+    entrypoint: ["echo", "Training image built successfully"]
+    profiles:
+      - training
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  minio_data:
+  clickhouse_data:

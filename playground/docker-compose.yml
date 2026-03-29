@@ -1,0 +1,71 @@
+version: "3.9"
+
+# Playground stack: robot simulator + inference + ROS2 bridge
+# Connects to the platform stack via shared Docker network.
+#
+# Usage:
+#   1. Start platform first:  cd ../platform && docker compose up -d
+#   2. Start playground:      docker compose up -d
+#
+# Or run standalone (simulator streams to a local gRPC target):
+#   GRPC_TARGET=host.docker.internal:50051 docker compose up simulator
+
+services:
+  simulator:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.simulator
+    ports:
+      - "50052:50052"
+    environment:
+      SIM_ROBOT_COUNT: "10"
+      SIM_TICK_MS: "100"
+      SIMULATION_GRPC_PORT: "50052"
+      REDIS_ADDR: redis:6379
+    command: ["-target", "ingestion:50051"]
+    depends_on:
+      - inference
+    networks:
+      - fleetos-net
+    restart: unless-stopped
+
+  inference:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.inference
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8081/health\")'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - fleetos-net
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    ports:
+      - "5173:5173"
+    networks:
+      - fleetos-net
+    restart: unless-stopped
+
+  ros2-bridge:
+    build:
+      context: ./ros2_bridge
+      dockerfile: Dockerfile
+    environment:
+      ROS_DOMAIN_ID: "0"
+    networks:
+      - fleetos-net
+    restart: unless-stopped
+
+networks:
+  fleetos-net:
+    external: true
+    name: platform_default

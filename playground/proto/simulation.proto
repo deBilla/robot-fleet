@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+package fleetos.simulation;
+
+option go_package = "github.com/dimuthu/robot-fleet-playground/internal/simulation";
+
+import "google/protobuf/timestamp.proto";
+
+// SimulationService defines the Uranus-style validation interface.
+// The playground implements this service; the platform calls it
+// to validate agents before deployment to physical robots.
+service SimulationService {
+  // Validate an agent payload against a scenario suite.
+  // Blocks until all scenarios complete; returns aggregate report.
+  rpc ValidateAgent(ValidationRequest) returns (ValidationReport);
+
+  // Run a single scenario with streaming progress events.
+  rpc RunScenario(ScenarioRequest) returns (stream ScenarioEvent);
+
+  // List available scenario suites and their scenario counts.
+  rpc ListScenarios(ListScenariosRequest) returns (ListScenariosResponse);
+}
+
+// --- Validation ---
+
+message ValidationRequest {
+  string agent_id = 1;
+  string agent_version = 2;
+  bytes  safety_envelope_json = 3;
+  string scenario_suite = 4;        // "standard", "stress", "edge-cases"
+  int32  max_scenarios = 5;          // 0 = run all in suite
+}
+
+message ValidationReport {
+  string request_id = 1;
+  int32  scenarios_passed = 2;
+  int32  scenarios_total = 3;
+  double pass_rate = 4;
+  bool   deployment_approved = 5;
+  repeated ScenarioResult results = 6;
+  google.protobuf.Timestamp completed_at = 7;
+}
+
+message ScenarioResult {
+  string scenario_id = 1;
+  string description = 2;
+  bool   passed = 3;
+  string failure_reason = 4;
+  double duration_seconds = 5;
+  repeated SafetyViolation violations = 6;
+  map<string, double> metrics = 7;   // task_success_rate, stability_margin, etc.
+}
+
+message SafetyViolation {
+  string type = 1;                   // "velocity_exceeded", "force_exceeded", "boundary_breach"
+  string detail = 2;
+  double magnitude = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// --- Scenario Execution ---
+
+message ScenarioRequest {
+  string scenario_id = 1;
+  string agent_id = 2;
+  string agent_version = 3;
+  bytes  safety_envelope_json = 4;
+  map<string, string> parameters = 5; // scenario-specific overrides
+}
+
+message ScenarioEvent {
+  string scenario_id = 1;
+  string event_type = 2;            // "started", "step", "violation", "completed", "failed"
+  string message = 3;
+  double elapsed_seconds = 4;
+  map<string, double> metrics = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+// --- Scenario Catalog ---
+
+message ListScenariosRequest {
+  string suite = 1;                  // filter by suite, empty = all
+}
+
+message ListScenariosResponse {
+  repeated ScenarioSuite suites = 1;
+}
+
+message ScenarioSuite {
+  string name = 1;
+  string description = 2;
+  int32  scenario_count = 3;
+  repeated ScenarioInfo scenarios = 4;
+}
+
+message ScenarioInfo {
+  string id = 1;
+  string description = 2;
+  string difficulty = 3;             // "easy", "medium", "hard", "edge-case"
+  repeated string tags = 4;          // "locomotion", "manipulation", "navigation"
+}

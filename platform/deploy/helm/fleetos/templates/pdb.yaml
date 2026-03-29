@@ -1,0 +1,55 @@
+{{- if ge (int .Values.api.replicaCount) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-api-pdb
+  labels:
+    app: fleetos-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: fleetos-api
+{{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-ingestion-pdb
+  labels:
+    app: fleetos-ingestion
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: fleetos-ingestion
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-processor-pdb
+  labels:
+    app: fleetos-processor
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: fleetos-processor
+---
+{{- if ge (int .Values.inference.replicaCount) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-inference-pdb
+  labels:
+    app: fleetos-inference
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: fleetos-inference
+{{- end }}

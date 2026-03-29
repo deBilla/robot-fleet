@@ -1,0 +1,48 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-api
+  labels:
+    app: fleetos-api
+    release: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: fleetos-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-ingestion
+  labels:
+    app: fleetos-ingestion
+    release: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: fleetos-ingestion
+  endpoints:
+    - port: metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-inference
+  labels:
+    app: fleetos-inference
+    release: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: fleetos-inference
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+{{- end }}

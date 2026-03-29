@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-analytics
+  labels:
+    app: fleetos-analytics
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  schedule: "0 * * * *"  # every hour
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app: fleetos-analytics
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: analytics
+              image: bitnami/spark:3.5
+              command:
+                - spark-submit
+                - --master
+                - local[*]
+                - /app/telemetry_analytics.py
+              env:
+                - name: S3_ENDPOINT
+                  value: "http://{{ .Release.Name }}-minio:9000"
+                - name: S3_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-minio-secret
+                      key: access-key
+                - name: S3_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-minio-secret
+                      key: secret-key
+                - name: S3_BUCKET
+                  value: fleetos-telemetry
+                - name: CLICKHOUSE_ADDR
+                  value: "http://{{ .Release.Name }}-clickhouse:8123"
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 2Gi
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+              volumeMounts:
+                - name: analytics-scripts
+                  mountPath: /app
+          volumes:
+            - name: analytics-scripts
+              configMap:
+                name: {{ .Release.Name }}-analytics-scripts

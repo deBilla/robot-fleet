@@ -3,7 +3,25 @@
     "allow": [
       "Bash(git init:*)",
       "Bash(go version:*)",
-      "Bash(protoc --version)"
+      "Bash(protoc --version)",
+      "WebFetch(domain:menlo.ai)",
+      "Read(//Users/dimuthu/robot-fleet sed -i  s|github.com/dimuthu/robot-fleet/internal/telemetry|github.com/dimuthu/robot-fleet-playground/internal/telemetry|g playground/internal/simulator/robot.go playground/internal/simulator/fleet.go sed -i  s|github.com/dimuthu/robot-fleet/internal/config|github.com/dimuthu/robot-fleet-playground/internal/config|g playground/cmd/simulator/main.go sed -i  s|github.com/dimuthu/robot-fleet/internal/simulator|github.com/dimuthu/robot-fleet-playground/internal/simulator|g playground/cmd/simulator/**)",
+      "Bash(protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative -I. proto/telemetry.proto)",
+      "Bash(mv proto/*.pb.go internal/telemetry/)",
+      "Bash(mv proto/*_grpc.pb.go internal/telemetry/)",
+      "Bash(ls -d /Users/dimuthu/robot-fleet/*/)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(mkdir -p internal/simulation)",
+      "Bash(protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative -I. proto/simulation.proto)",
+      "Bash(mv proto/simulation.pb.go internal/simulation/)",
+      "Bash(mv proto/simulation_grpc.pb.go internal/simulation/)",
+      "Bash(for f:*)",
+      "Bash(psql \"postgres://fleetos:fleetos@localhost:5432/fleetos?sslmode=disable\" -f \"$f\")"
+    ],
+    "additionalDirectories": [
+      "/dev",
+      "/Users/dimuthu/robot-fleet/internal/simulator"
     ]
   },
   "hooks": {
@@ -13,15 +31,15 @@
         "hooks": [
           {
             "type": "prompt",
-            "if": "Bash(git commit:*)|Bash(git add:*)",
             "prompt": "The user is about to commit code. Before allowing, check: Does this commit include changes to features, endpoints, services, infrastructure, or architecture that should be reflected in README.md? If the staged changes add new API endpoints, new services, new infrastructure components, or change the architecture, and README.md is NOT in the staged files, BLOCK with message: 'README.md may need updating to reflect these changes. Review README.md and update if needed before committing.' If README.md is already staged, or the changes are minor (bug fixes, refactoring, test-only), ALLOW.",
+            "if": "Bash(git commit:*)|Bash(git add:*)",
             "model": "claude-haiku-4-5-20251001",
             "statusMessage": "Checking if README needs updating..."
           },
           {
             "type": "command",
-            "if": "Bash(git commit:*)",
             "command": "cd /Users/dimuthu/robot-fleet && go build ./... 2>&1 && go test -race -count=1 ./internal/... ./test/... 2>&1 || { echo '{\"decision\":\"block\",\"reason\":\"Build or tests failed. Fix before committing.\"}'; exit 0; }",
+            "if": "Bash(git commit:*)",
             "timeout": 120,
             "statusMessage": "Running build + tests before commit..."
           }
@@ -34,15 +52,15 @@
         "hooks": [
           {
             "type": "prompt",
-            "if": "Edit(*.go)|Write(*.go)",
             "prompt": "You are a Go code quality reviewer for the FleetOS project. Review ONLY the change that was just made (shown in $ARGUMENTS). Check against these rules and BLOCK if any are violated:\n\n1. MAGIC NUMBERS: Numeric literals (other than 0, 1, -1) must be named constants. Block if you see bare numbers like 100, 48.0, 500 etc.\n2. ERROR WRAPPING: All returned errors must use fmt.Errorf(\"context: %w\", err). Block if you see bare 'return err' without wrapping.\n3. INTERFACES IN SERVICES: Files in internal/service/ must accept interfaces (from internal/store/interfaces.go), never concrete types like *PostgresStore or *RedisStore. Block if constructor takes a concrete store type.\n4. SILENT ERRORS: Ignored errors (using _) must have a comment explaining why. Block if you see '_, _ = ...' or 'val, _ := ...' without a comment on the same or previous line.\n5. TDD: If implementation code is being written/edited in internal/, check that test code exists or is being written in the same session.\n\nIf the file is a test file (*_test.go), auto-generated code (internal/telemetry/, internal/models/), or non-Go file, ALLOW.\nIf the change is minor (imports, comments, formatting), ALLOW.\nOnly BLOCK for clear violations. When blocking, explain which rule was violated and how to fix it.",
+            "if": "Edit(*.go)|Write(*.go)",
             "model": "claude-haiku-4-5-20251001",
             "statusMessage": "Checking Go code quality..."
           },
           {
             "type": "prompt",
-            "if": "Edit(docker-compose*)|Write(docker-compose*)|Edit(deploy/*)|Write(deploy/*)|Edit(Dockerfile*)|Write(Dockerfile*)|Edit(observability/*)|Write(observability/*)|Edit(.github/*)|Write(.github/*)",
             "prompt": "You are an infrastructure reviewer for the FleetOS project. Review ONLY the change just made (shown in $ARGUMENTS). Check against these rules and BLOCK if any are violated:\n\n1. HARDCODED SECRETS: No plaintext passwords, API keys, or tokens. Use env vars, secrets managers, or Helm secrets. Block if you see password=, secret=, token= with actual values.\n2. HEALTH CHECKS: Every Docker service must have a healthcheck. Block if a new service is added without one.\n3. NON-ROOT CONTAINERS: Dockerfiles must include USER directive with non-root user. Block if FROM...ENTRYPOINT has no USER.\n4. ENCRYPTION: S3 buckets need SSE, RDS needs storage_encrypted, ElastiCache needs transit_encryption. Block if new resources lack encryption.\n5. RESOURCE LIMITS: Kubernetes deployments need resource requests and limits. Block if a deployment has no resources section.\n6. SECURITY CONTEXT: Helm deployments need runAsNonRoot, allowPrivilegeEscalation: false. Block if missing.\n7. IMAGE TAGS: Never use 'latest' tag in Helm values or Kubernetes manifests. Block if tag: latest.\n8. DEPENDENCIES: Docker services must use condition: service_healthy (not service_started) for critical dependencies.\n\nIf the change is minor (comments, formatting, labels), ALLOW.\nOnly BLOCK for clear violations with specific fix instructions.",
+            "if": "Edit(docker-compose*)|Write(docker-compose*)|Edit(deploy/*)|Write(deploy/*)|Edit(Dockerfile*)|Write(Dockerfile*)|Edit(observability/*)|Write(observability/*)|Edit(.github/*)|Write(.github/*)",
             "model": "claude-haiku-4-5-20251001",
             "statusMessage": "Checking infrastructure quality..."
           }

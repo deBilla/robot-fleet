@@ -13,9 +13,6 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: platform
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -28,9 +25,6 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: platform
     services:
       postgres:
         image: postgres:16-alpine
@@ -69,7 +63,7 @@ jobs:
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:
-          file: platform/coverage.out
+          file: coverage.out
 
   docker-build:
     needs: [lint, test]
@@ -80,7 +74,7 @@ jobs:
       contents: read
     strategy:
       matrix:
-        service: [api, ingestion, processor, worker]
+        service: [api, ingestion, processor, simulator, inference]
     steps:
       - uses: actions/checkout@v4
 
@@ -102,7 +96,7 @@ jobs:
         run: |
           IMAGE="${{ env.ECR_REGISTRY }}/fleetos/${{ matrix.service }}:${{ steps.tag.outputs.tag }}"
           IMAGE_LATEST="${{ env.ECR_REGISTRY }}/fleetos/${{ matrix.service }}:latest"
-          docker build -f platform/deploy/docker/Dockerfile.${{ matrix.service }} -t "$IMAGE" -t "$IMAGE_LATEST" .
+          docker build -f deploy/docker/Dockerfile.${{ matrix.service }} -t "$IMAGE" -t "$IMAGE_LATEST" .
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
 
@@ -131,7 +125,7 @@ jobs:
 
       - name: Deploy via Helm
         run: |
-          helm upgrade --install fleetos platform/deploy/helm/fleetos \
+          helm upgrade --install fleetos deploy/helm/fleetos \
             --set api.image.tag=${{ steps.tag.outputs.tag }} \
             --set ingestion.image.tag=${{ steps.tag.outputs.tag }} \
             --set inference.image.tag=${{ steps.tag.outputs.tag }} \

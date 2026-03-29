@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+package fleetos.telemetry;
+
+option go_package = "github.com/dimuthu/robot-fleet-playground/internal/telemetry";
+
+import "google/protobuf/timestamp.proto";
+
+// Sensor data types emitted by robots
+
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Quaternion {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+message JointState {
+  string name = 1;
+  double position = 2;   // radians
+  double velocity = 3;   // rad/s
+  double torque = 4;     // Nm
+}
+
+message LidarPoint {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+  float intensity = 4;
+}
+
+message LidarScan {
+  repeated LidarPoint points = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message VideoFrame {
+  bytes data = 1;           // JPEG/H264 encoded frame
+  string encoding = 2;      // "jpeg", "h264"
+  int32 width = 3;
+  int32 height = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message AudioChunk {
+  bytes data = 1;            // PCM audio data
+  int32 sample_rate = 2;     // e.g., 16000
+  int32 channels = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message Pose {
+  Vector3 position = 1;
+  Quaternion orientation = 2;
+}
+
+message RobotState {
+  string robot_id = 1;
+  Pose pose = 2;
+  repeated JointState joints = 3;
+  double battery_level = 4;     // 0.0 - 1.0
+  string status = 5;            // "idle", "active", "charging", "error"
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message TelemetryPacket {
+  string robot_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  oneof payload {
+    RobotState state = 3;
+    VideoFrame video = 4;
+    LidarScan lidar = 5;
+    AudioChunk audio = 6;
+  }
+}
+
+message RobotCommand {
+  string robot_id = 1;
+  string command_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  oneof action {
+    MoveCommand move = 4;
+    JointCommand joint = 5;
+    StopCommand stop = 6;
+  }
+}
+
+message MoveCommand {
+  Vector3 target_position = 1;
+  double max_velocity = 2;
+}
+
+message JointCommand {
+  repeated JointState target_joints = 1;
+  double duration_seconds = 2;
+}
+
+message StopCommand {
+  bool emergency = 1;
+}
+
+message StreamAck {
+  string message_id = 1;
+  bool success = 2;
+}
+
+// Robot -> Cloud telemetry streaming
+service TelemetryService {
+  // Bidirectional stream: robot sends telemetry, cloud sends acks
+  rpc StreamTelemetry(stream TelemetryPacket) returns (stream StreamAck);
+
+  // Cloud -> Robot command stream
+  rpc StreamCommands(CommandRequest) returns (stream RobotCommand);
+}
+
+message CommandRequest {
+  string robot_id = 1;
+}
