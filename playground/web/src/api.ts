@@ -24,10 +24,8 @@ export const api = {
   sendCommand: (id: string, type: string, params: Record<string, unknown>) =>
     request('POST', `/api/v1/robots/${id}/command`, { type, params }),
   getTelemetry: (id: string) => request('GET', `/api/v1/robots/${id}/telemetry`),
-  runInference: (image: string, instruction: string, modelId?: string) =>
-    request('POST', '/api/v1/inference', { image, instruction, model_id: modelId }),
-  semanticCommand: (id: string, instruction: string) =>
-    request('POST', `/api/v1/robots/${id}/semantic-command`, { instruction, robot_id: id }),
+  runInference: (image: string, instruction: string, robotId?: string) =>
+    request('POST', '/api/v1/inference', { image, instruction, robot_id: robotId }),
   getFleetMetrics: () => request('GET', '/api/v1/fleet/metrics'),
   getUsage: () => request('GET', '/api/v1/usage'),
 };

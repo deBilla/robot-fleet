@@ -8,6 +8,9 @@ export interface TelemetryEvent {
   pos_z: number;
   battery_level: number;
   timestamp: number;
+  joints: Record<string, number>;
+  joint_torques: Record<string, number>;
+  joint_velocities: Record<string, number>;
 }
 
 export function useWebSocket(robotId?: string) {

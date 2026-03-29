@@ -1,0 +1,7 @@
+gymnasium[mujoco]==1.1.1
+mujoco>=3.1
+grpcio==1.68.1
+grpcio-tools==1.68.1
+protobuf>=5.27
+redis>=5.0
+numpy>=1.26

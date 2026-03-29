@@ -16,13 +16,14 @@ services:
       context: .
       dockerfile: deploy/Dockerfile.simulator
     ports:
-      - "50052:50052"
+      - "8085:8085"
     environment:
-      SIM_ROBOT_COUNT: "10"
-      SIM_TICK_MS: "100"
-      SIMULATION_GRPC_PORT: "50052"
-      REDIS_ADDR: redis:6379
-    command: ["-target", "ingestion:50051"]
+      ROBOT_ID: "robot-0001"
+      GRPC_TARGET: "ingestion:50051"
+      REDIS_ADDR: "redis:6379"
+      SIM_STEP_HZ: "50"
+      TELEMETRY_HZ: "10"
+      FRAME_PORT: "8085"
     depends_on:
       - inference
     networks:

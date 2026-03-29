@@ -62,6 +62,7 @@ type InferenceRequest struct {
 	Instruction string `json:"instruction"`
 	ModelID     string `json:"model_id"`
 	Embodiment  string `json:"embodiment"`
+	RobotID     string `json:"robot_id,omitempty"`
 }
 
 // SemanticCommandResult holds the outcome of a semantic command interpretation.

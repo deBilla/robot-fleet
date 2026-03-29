@@ -22,8 +22,7 @@ const HELP_TEXT = `Available commands:
   jump <id>           - Make robot jump
   look <id>           - Make robot look around
   stretch <id>        - Make robot stretch
-  semantic <id> <msg> - Natural language command (GR00T-style)
-  infer <instruction> - Run AI inference
+infer <instruction> - Run AI inference
   metrics             - Get fleet metrics
   usage               - Get API usage
   health              - Check API health
@@ -151,14 +150,6 @@ export function CommandConsole() {
           const actionType = command === 'look' ? 'look_around' : command;
           const res = await api.sendCommand(id, actionType, { instruction: command });
           addLine('recv', `[${res.status}] ${id} is now ${command}ing`);
-          break;
-        }
-
-        case 'semantic': {
-          const id = parts[1] || 'robot-0001';
-          const instruction = parts.slice(2).join(' ') || 'walk forward';
-          const res = await api.semanticCommand(id, instruction);
-          addLine('recv', `[${res.status}] ${JSON.stringify(res.data, null, 2)}`);
           break;
         }
 

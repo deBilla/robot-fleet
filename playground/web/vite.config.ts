@@ -22,6 +22,11 @@ export default defineConfig({
         target: 'http://api:8080',
         changeOrigin: true,
       },
+      '/simulator': {
+        target: 'http://simulator:8085',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/simulator/, ''),
+      },
     },
   },
 })

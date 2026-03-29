@@ -143,8 +143,7 @@ func main() {
 	authedMux.HandleFunc("GET /api/v1/robots/{id}/commands", handler.GetCommandHistory)
 	authedMux.HandleFunc("GET /api/v1/robots/{id}/telemetry", handler.GetTelemetry)
 	authedMux.HandleFunc("POST /api/v1/inference", handler.RunInference)
-	authedMux.HandleFunc("POST /api/v1/robots/{id}/semantic-command", handler.SemanticCommand)
-	authedMux.HandleFunc("GET /api/v1/fleet/metrics", handler.GetFleetMetrics)
+authedMux.HandleFunc("GET /api/v1/fleet/metrics", handler.GetFleetMetrics)
 	authedMux.HandleFunc("GET /api/v1/usage", handler.GetUsage)
 	// Model registry routes
 	authedMux.HandleFunc("POST /api/v1/models", modelHandler.RegisterModel)
