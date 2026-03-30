@@ -1,6 +1,6 @@
 # FleetOS Playground
 
-Robot simulation environment for the FleetOS platform. The playground acts like a **real robot** — it only sends telemetry and executes commands. All reasoning (inference, model management) happens in the platform.
+Robot simulation environment for the FleetOS platform. The playground acts like a **real robot** — it runs physics, sends telemetry (including performance metrics), and executes commands. All reasoning (inference, model management, billing) happens in the platform.
 
 This follows the **Menlo OS architecture**: high-level reasoning in the cloud, execution on the robot.
 
@@ -11,45 +11,40 @@ Playground (Robot)                      Platform (Cloud Brain)
 ──────────────────                      ──────────────────────
 Simulator (MuJoCo Humanoid-v4)
   ├── gRPC StreamTelemetry ──────────►  Ingestion :50051
-  │   (20-joint state, LiDAR, video)      ├── Kafka (robot.telemetry)
-  │                                       └── Processor → Postgres/Redis/S3
-  ├── gRPC StreamCommands  ◄────────── Ingestion :50051
-  │   (move, wave, dance, inference)      └── Bridges Redis commands → gRPC
-  └── HTTP :8085 (/spawn, /robots)
-                                        API :8080
-Web UI :5173 ──────HTTP──────────────►   ├── /api/v1/robots, /command, /telemetry
-                                         ├── /api/v1/inference → Inference :8081
-                                         └── Commands → Kafka (robot.commands)
-                                                          → Processor → Temporal Workflow
-                                                          → Redis → gRPC → Robot
+  │   (20-joint state + PerformanceMetrics)  ├── Kafka (robot.telemetry)
+  │   reward, uptime, falls, velocity        └── Processor → Postgres/Redis/S3
+  │                                                └── Aggregates success_rate → model registry
+  ├── gRPC StreamCommands  ◄──────────  Ingestion :50051
+  │   (move, wave, dance, inference)        └── Kafka (robot.commands.dispatch)
+  └── HTTP :8085 (/spawn, /robots)              → CommandDispatcher → gRPC
+                                                → Kafka (robot.command-acks) → Temporal
+Web UI :5173
+  ├── Three.js 3D simulation view       API :8080
+  ├── AI Inference Pipeline panel         ├── /api/v1/inference (per-robot model lookup)
+  ├── Command Feed (live polling)         ├── Admin Console at /admin/
+  └── Model Performance metrics           └── Temporal :7233 (workflows)
 
-                                        Temporal :7233 (workflow orchestration)
-                                         ├── CommandDispatchWorkflow (audit + ack tracking)
-                                         ├── Optional inference step (RunInference activity)
-                                         └── UI at :8233
-
-                                        Inference :8081 (runs in platform stack)
-                                         ├── SB3 PPO policy serving
-                                         ├── Loads model from MinIO (S3)
-                                         └── Polls model registry for new deploys
+Inference :8081 (SB3 PPO, runs in platform stack)
+  ├── Serves robot's assigned model (inference_model_id)
+  ├── Hot-swaps from S3 on model registry deploy
+  └── Polls platform API for new deployments
 ```
 
 ## What the Playground Does NOT Do
 
 - No inference (runs in platform)
-- No model management (platform model registry)
+- No model management (platform model registry + canary deployment)
 - No direct Redis or Kafka access (commands arrive via gRPC `StreamCommands`)
-- No Temporal interaction (workflows are platform-side only)
+- No billing (platform Temporal workflows)
 - No training (handled by `platform/training/`)
 
 ## Quick Start
 
 ```bash
-# Start both platform + playground from repo root
-../start.sh
-
-# Or start individually (platform must be running first)
+# Platform must be running first
 cd ../platform && docker compose up -d
+
+# Start playground
 docker compose up -d
 
 # Open the web dashboard
@@ -60,42 +55,48 @@ open http://localhost:5173
 
 | Service | Port | Description |
 |---------|------|-------------|
-| `simulator` | 8085 | MuJoCo Humanoid-v4 physics, gRPC telemetry/commands |
-| `web` | 5173 | React dashboard (Three.js 3D view, inference panel) |
+| `simulator` | 8085 | MuJoCo physics (7x sub-stepping for real-time), gRPC telemetry + commands |
+| `web` | 5173 | React dashboard (Three.js 3D, inference pipeline, command feed, performance metrics) |
 | `ros2-bridge` | — | Bridges platform telemetry to ROS 2 topics |
 
-## Communication
+## Performance Metrics
 
-The simulator communicates with the platform exclusively via gRPC:
+The simulator computes **Humanoid-v4 reward** every physics step and streams it back to the platform via protobuf `PerformanceMetrics`:
 
-- **StreamTelemetry** (bidirectional): Sends `TelemetryPacket` (robot state, LiDAR, video), receives `StreamAck`
-- **StreamCommands** (server-stream): Sends `CommandRequest(robot_id)`, receives `RobotCommand` stream with `command_type` field (move, wave, dance, etc.)
+| Metric | Formula | Purpose |
+|--------|---------|---------|
+| `reward` | forward_velocity + alive_bonus(5.0) - control_cost(0.1 * ctrl^2) | Current episode accumulated reward |
+| `uptime_pct` | time_standing / total_time | Becomes `success_rate` in model registry for canary evaluation |
+| `fall_count` | total resets (height < 0.4m) | Stability indicator |
+| `forward_velocity` | delta_x / dt | Locomotion quality |
 
-Both streams auto-reconnect on error.
+The platform processor aggregates `uptime_pct` across all robots per model every 30s and updates the model registry's `success_rate`. This is what `CompareCanaryMetrics` uses during canary deployments — if the new model's success_rate degrades >10% vs baseline, it auto-rolls back.
 
 ## Command Flow
 
-When a user sends a command or runs inference from the Web UI:
-
 ```
-Web UI ("walk") → POST /api/v1/inference → Platform API
-    → Inference server (PPO model) → predicted actions
-    → API publishes CommandMessage to Kafka (robot.commands)
-    → Processor starts Temporal workflow (visible at :8233)
-    → Workflow: WriteAudit → [optional RunInference] → PublishCommand (Redis)
-    → Ingestion bridges Redis → gRPC StreamCommands
-    → Simulator CommandHandler receives "walk"
-    → get_action(step) returns cyclic walking gait torques
-    → MuJoCo applies torques → robot walks
+Web UI ("walk forward") → POST /api/v1/inference
+  → API looks up robot's inference_model_id → sends to inference:8081
+  → SB3 PPO policy predicts 17-dim action vector
+  → Known command ("walk") resolved directly (smoother motion)
+  → API publishes to Kafka robot.commands
+  → Processor starts Temporal CommandDispatchWorkflow
+  → Workflow: WriteAudit → PublishCommand → Kafka robot.commands.dispatch
+  → Ingestion CommandDispatcher routes to robot's gRPC stream
+  → Simulator CommandHandler receives "walk"
+  → _walk_action(sim_time) produces cyclic gait torques
+  → MuJoCo physics (7 sub-steps × 0.003s = real-time)
+  → Robot walks, telemetry streams back with reward metrics
 ```
 
-For known locomotion commands (walk, wave, dance, etc.), the robot runs its own built-in continuous action loops for smoother motion. For unknown instructions, the model's raw predicted torques are applied directly.
+## Web Dashboard Features
 
-## Shared Contracts
-
-Both projects use the same `.proto` definitions (copied, not shared):
-- `proto/telemetry.proto` — robot ↔ platform data plane (TelemetryPacket, RobotCommand, StreamCommands)
-- `proto/simulation.proto` — Uranus-style validation interface (ValidateAgent, RunScenario)
+- **3D Simulation View** — Three.js rendering of MuJoCo humanoid in lab room
+- **AI Inference Pipeline** — 4-step visualization: instruction → inference → dispatch → robot ack (with timing)
+- **Command Feed** — Live-polling command history with status badges and flash animation on new commands
+- **Model Performance** — Real-time reward, avg episode reward, uptime %, velocity, falls, episode count
+- **Joint Visualizer** — Per-joint angle bars with torque indicators
+- **Telemetry Stream** — Raw telemetry event log
 
 ## Environment Variables
 
@@ -103,6 +104,6 @@ Both projects use the same `.proto` definitions (copied, not shared):
 |----------|---------|-------------|
 | `ROBOT_ID` | robot-0001 | Initial robot identifier |
 | `GRPC_TARGET` | ingestion:50051 | Ingestion gRPC endpoint |
-| `SIM_STEP_HZ` | 50 | Physics step rate |
+| `SIM_STEP_HZ` | 50 | Control loop rate (physics sub-steps 7x for real-time) |
 | `TELEMETRY_HZ` | 10 | Telemetry send rate |
 | `CONTROL_PORT` | 8085 | HTTP control server port |

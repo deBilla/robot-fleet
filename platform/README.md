@@ -11,8 +11,13 @@ A distributed robot fleet management platform following the **Menlo OS architect
 - **Durable Command Pipeline** -- Commands published to Kafka (`robot.commands`), consumed by processor, orchestrated via Temporal workflows with audit trail, ack tracking, retries, and timeout handling
 - **Semantic Commands** -- Natural language robot control via extensible command registry (strategy pattern)
 - **Model Registry** -- Model lifecycle management (staged -> canary -> deployed -> archived) with S3 artifact storage, canary deployment via Temporal workflows
-- **gRPC Command Bridge** -- Ingestion service bridges Redis commands to gRPC `StreamCommands` for robots (robots never access Redis directly)
-- **Temporal Workflow Orchestration** -- Command dispatch, model deployment, agent deployment, and webhook delivery all run as durable Temporal workflows with full visibility via Temporal UI
+- **Admin Console** -- React SPA at `/admin/` for tenant management, DB-backed API key lifecycle (create/revoke with SHA-256 hashing), billing overview
+- **Temporal Billing** -- Per-tenant BillingCycleWorkflow: 6h usage aggregation (Redis → Postgres), monthly invoice generation, payment processing with dunning retries, tier change signals
+- **Canary Model Deployment** -- Progressive rollout (5% → 25% → 50% → 100%) with deterministic robot selection (fnv32 hash), live success_rate comparison from robot uptime metrics, automatic rollback
+- **Per-Robot Model Assignment** -- Each robot tracks its `inference_model_id`; inference lookups use the assigned model; canary deployments progressively update assignments
+- **Performance Metrics Feedback** -- Simulator computes Humanoid-v4 reward (forward velocity + alive bonus - control cost), tracks falls/uptime, streams metrics via protobuf → processor aggregates into model registry `success_rate`
+- **Kafka Event Pipeline** -- Commands, acks, and deployment events all flow through Kafka topics (no Redis pub/sub for events); Redis is cache + rate limiter only
+- **Temporal Workflow Orchestration** -- Command dispatch, model deployment, agent deployment, billing cycles, and webhook delivery all run as durable Temporal workflows with full visibility via Temporal UI
 - **FAISS Vector Search** -- Semantic search over robot fleet state ("find robots with low battery near warehouse")
 - **Analytics Pipeline** -- S3 (raw NDJSON) -> Spark (batch) -> ClickHouse (OLAP) -> Redis (cache) -> API
 - **ROS 2 Integration** -- Bridge node publishing to standard ROS 2 topics (JointState, PoseStamped, BatteryState, LaserScan)
@@ -121,30 +126,35 @@ open http://localhost:8123   # ClickHouse (direct SQL)
 |--------|------|-------------|
 | `GET` | `/healthz` | Health check |
 | `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/api/v1/robots` | List robots (paginated) |
-| `GET` | `/api/v1/robots/{id}` | Get robot (Redis hot state -> Postgres fallback) |
-| `POST` | `/api/v1/robots/{id}/command` | Send command via Kafka -> Temporal workflow |
-| `POST` | `/api/v1/robots/{id}/semantic-command` | Natural language command |
-| `GET` | `/api/v1/robots/{id}/telemetry` | Latest telemetry from Redis |
-| `POST` | `/api/v1/inference` | AI inference (diffusion policy) |
+| `GET` | `/admin/` | Admin console (React SPA) |
+| `GET` | `/api/v1/robots` | List robots (paginated, includes model assignment) |
+| `GET` | `/api/v1/robots/{id}` | Get robot (hot state + inference_model_id) |
+| `POST` | `/api/v1/robots/{id}/command` | Send command → Kafka → Temporal workflow |
+| `GET` | `/api/v1/robots/{id}/commands` | Command history with audit trail |
+| `POST` | `/api/v1/inference` | AI inference (uses robot's assigned model) |
 | `GET` | `/api/v1/fleet/metrics` | Aggregated fleet stats |
-| `GET` | `/api/v1/usage` | Per-tenant API usage |
-| `POST` | `/api/v1/models` | Register model |
-| `GET` | `/api/v1/models` | List models (filter by status) |
-| `POST` | `/api/v1/models/{id}/deploy` | Deploy model |
+| `POST` | `/api/v1/models` | Register model (staged) |
+| `POST` | `/api/v1/models/{id}/deploy` | Deploy model (canary rollout) |
+| `GET` | `/api/v1/billing/subscription` | Current subscription |
+| `PUT` | `/api/v1/billing/subscription/tier` | Change tier (signals workflow) |
+| `GET` | `/api/v1/billing/invoices` | Invoice history |
+| `POST` | `/api/v1/admin/tenants` | Create tenant + API key (admin only) |
+| `GET` | `/api/v1/admin/tenants` | List tenants (admin only) |
+| `POST` | `/api/v1/admin/tenants/{id}/keys` | Generate API key (admin only) |
+| `DELETE` | `/api/v1/admin/keys/{hash}` | Revoke API key (admin only) |
 | `GET` | `/api/v1/analytics/fleet` | Fleet hourly metrics (ClickHouse) |
-| `GET` | `/api/v1/analytics/robots/{id}` | Per-robot analytics |
-| `GET` | `/api/v1/analytics/anomalies` | Detected anomalies |
 | `GET` | `/api/v1/ws/telemetry` | WebSocket real-time stream |
 
 ### Authentication
 
 Three methods supported:
-- **API Key**: `X-API-Key` header
+- **API Key**: `X-API-Key` header (DB-backed with SHA-256 hashing, or hardcoded dev keys)
 - **JWT Bearer**: `Authorization: Bearer <token>` (HS256)
 - **OAuth2/OIDC**: Bearer token validated against issuer's JWKS
 
-Dev API keys: `dev-key-001` (admin), `dev-key-002` (viewer)
+Dev keys: `dev-key-001` (admin/enterprise), `dev-key-002` (viewer/free)
+
+RBAC: `admin`, `operator`, `developer`, `viewer`. Admin routes under `/api/v1/admin/` require `RequireRole(admin)`.
 
 ## Data Pipeline
 
@@ -176,27 +186,30 @@ Robots -> gRPC stream -> Ingestion -> Kafka (partitioned by robot_id)
 ```
 REST API /command ──┐
                     ├──> Kafka (robot.commands) ──> Processor ──> Temporal Workflow
-REST API /inference ┘    (JSON, keyed by robot_id)                     |
+REST API /inference ┘    (keyed by robot_id)                           |
                                                          ┌─────────────┼─────────────┐
                                                          v             v             v
                                                     WriteAudit    [RunInference]  PublishCommand
-                                                    (Postgres)     (optional)     (Redis pub/sub)
+                                                    (Postgres)     (optional)     (Kafka dispatch topic)
+                                                                                      |
+                                                                      CommandDispatcher (1 consumer, N robots)
                                                                                       |
                                                                           gRPC StreamCommands -> Robot
                                                                                       |
-                                                                          Ack -> AckBridge -> Signal Workflow
+                                                                      Kafka robot.command-acks
+                                                                                      |
+                                                                      AckBridge (Kafka consumer) -> Signal Workflow
 ```
 
-**Workflow lifecycle:** requested -> dispatched -> acked/timeout
+**Kafka topics:**
+- `robot.commands` — API → processor (triggers Temporal workflow)
+- `robot.commands.dispatch` — Temporal activity → ingestion (commands to robots)
+- `robot.command-acks` — ingestion → worker (robot acknowledgments back to Temporal)
+- `deployment.events` — Temporal activities → SSE consumers (agent deployment progress)
 
-Commands and inference results both flow through this pipeline, giving every robot interaction a durable Temporal workflow with:
-- Full audit trail in Postgres
-- Ack tracking with 30s timeout
-- Automatic retries (3 attempts)
-- Visibility in Temporal UI (http://localhost:8233)
-- Idempotency via deterministic workflow IDs
+All event routing goes through Kafka. Redis is used only for cache (hot state, rate limiting, usage counters, dedup).
 
-When `with_inference=true`, the workflow calls the inference service before dispatching. Known locomotion commands (walk, wave, dance, etc.) are resolved to command types directly; unknown instructions use the model's predicted joint torques.
+**Workflow lifecycle:** requested → dispatched → acked/timeout
 
 ## AI Inference Pipeline
 
@@ -260,25 +273,26 @@ go test -race -coverprofile=coverage.out ./...
 ```
 platform/
 +-- cmd/                        # Service entry points
-|   +-- api/                    # REST API + WebSocket server
-|   +-- ingestion/              # gRPC telemetry receiver
-|   +-- processor/              # Kafka consumer (telemetry + commands -> Temporal)
-|   +-- worker/                 # Temporal worker (command, deployment, webhook workflows)
+|   +-- api/                    # REST API + WebSocket + admin console
+|   +-- ingestion/              # gRPC telemetry + Kafka command dispatch
+|   +-- processor/              # Kafka consumer → Postgres/Redis/S3 + metrics aggregation
+|   +-- worker/                 # Temporal worker (4 task queues: commands, deployments, billing, webhooks)
++-- admin-web/                  # React admin console (Vite + React 19 + TypeScript)
 +-- internal/                   # Core Go packages
-|   +-- api/                    # Thin HTTP handlers (no business logic)
-|   +-- service/                # Business logic layer (interfaces only)
-|   |   +-- types.go            # DTOs + RobotService interface
-|   |   +-- robot_service.go    # Robot CRUD, fleet metrics, usage
-|   |   +-- command_service.go  # SendCommand, SemanticCommand
-|   |   +-- inference_service.go # AI inference forwarding
-|   |   +-- billing_service.go  # Pricing tiers, invoice generation
+|   +-- api/                    # Thin HTTP handlers (handler, billing, admin, agent, model, etc.)
+|   +-- service/                # Business logic layer
+|   |   +-- robot_service.go    # Robot CRUD, fleet metrics
+|   |   +-- inference_service.go # Per-robot model lookup + inference
+|   |   +-- billing_service.go  # Pricing tiers, Temporal billing integration
+|   |   +-- billing_temporal_service.go # Billing workflows (invoices, tier changes)
+|   |   +-- admin_service.go    # Tenant + API key management
 |   |   +-- model_service.go    # Model registry lifecycle
-|   |   +-- analytics_service.go # ClickHouse + Redis cache
+|   +-- billing/                # Shared pricing types (breaks import cycles)
 |   +-- command/                # Semantic command registry (strategy pattern)
-|   +-- auth/                   # JWT, API keys, OAuth2/OIDC, RBAC
-|   +-- middleware/             # Rate limiting, metrics, logging, CORS, tracing
-|   +-- store/                  # PostgreSQL, Redis, S3, ClickHouse (interfaces)
-|   +-- temporal/               # Temporal client, workflows, activities, ack bridge
+|   +-- auth/                   # JWT, API keys (DB-backed), OAuth2/OIDC, RBAC
+|   +-- middleware/             # Rate limiting, quota, metrics, logging, CORS, tracing
+|   +-- store/                  # PostgreSQL, Redis, S3, ClickHouse (interfaces + implementations)
+|   +-- temporal/               # Client, workflows, activities, Kafka ack bridge
 |   +-- config/                 # Environment-based configuration
 +-- ../playground/inference/     # Python inference service (deployed in platform stack)
 |   +-- server.py               # SB3 PPO policy serving + instruction bias

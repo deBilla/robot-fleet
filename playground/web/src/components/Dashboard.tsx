@@ -56,6 +56,9 @@ export function Dashboard() {
         <InferencePanel selectedRobot={selected} />
       </div>
 
+      {/* Performance Metrics + Command Feed */}
+      {selected && <PerformanceMetrics data={selected} />}
+
       {/* Command Feed + Joint data */}
       <div className="grid-2">
         <CommandFeed robotId={selectedRobotId} />
@@ -329,6 +332,71 @@ function InferencePanel({ selectedRobot }: { selectedRobot: TelemetryEvent | nul
       )}
 
       {error && <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+// --- Performance Metrics ---
+
+function PerformanceMetrics({ data }: { data: TelemetryEvent }) {
+  const reward = data.reward ?? 0;
+  const avgReward = data.avg_episode_reward ?? 0;
+  const falls = data.fall_count ?? 0;
+  const episodes = data.episode_count ?? 0;
+  const uptime = data.uptime_pct ?? 0;
+  const velocity = data.forward_velocity ?? 0;
+  const modelId = data.inference_model_id || 'none';
+
+  const statStyle = (value: number, good: number, warn: number): string => {
+    if (value >= good) return 'var(--success)';
+    if (value >= warn) return 'var(--warning)';
+    return 'var(--danger)';
+  };
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div className="card-title">Model Performance</div>
+        <div className="card-subtitle">{data.robot_id} | model: {modelId}</div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reward</div>
+          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: reward > 0 ? 'var(--success)' : 'var(--danger)' }}>
+            {reward.toFixed(1)}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Avg Reward</div>
+          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: avgReward > 0 ? 'var(--cyan)' : 'var(--text-muted)' }}>
+            {avgReward.toFixed(1)}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Uptime</div>
+          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: statStyle(uptime, 0.8, 0.5) }}>
+            {(uptime * 100).toFixed(0)}%
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Velocity</div>
+          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+            {velocity.toFixed(3)}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Falls</div>
+          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: falls === 0 ? 'var(--success)' : 'var(--danger)' }}>
+            {falls}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Episodes</div>
+          <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+            {episodes}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

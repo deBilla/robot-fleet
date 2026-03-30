@@ -11,6 +11,14 @@ export interface TelemetryEvent {
   joints: Record<string, number>;
   joint_torques: Record<string, number>;
   joint_velocities: Record<string, number>;
+  inference_model_id?: string;
+  // Performance metrics
+  reward?: number;
+  avg_episode_reward?: number;
+  fall_count?: number;
+  episode_count?: number;
+  uptime_pct?: number;
+  forward_velocity?: number;
 }
 
 export function useWebSocket(robotId?: string) {
