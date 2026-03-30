@@ -2,29 +2,37 @@
 
 ## Project Overview
 
-FleetOS is a distributed robot fleet management platform. It simulates humanoid robots, ingests their telemetry via gRPC/Kafka, serves a REST/WebSocket API with auth and billing, and provides AI inference capabilities.
+FleetOS is a distributed robot fleet management platform following the **Menlo OS architecture**: high-level reasoning happens in the platform (cloud); robots handle execution only. The platform ingests telemetry via gRPC/Kafka, runs AI inference, manages model lifecycle, and sends commands back to robots via gRPC. This is the `platform/` subdirectory of the monorepo — see the root `CLAUDE.md` for full monorepo context.
 
 ## Architecture
 
 ```
-Simulated Robots (Go) → gRPC → Ingestion Service → Kafka → Storage (Postgres/Redis/S3)
-                                                              ↓
-                                                     REST API ← Developer SDKs
-                                                     WebSocket ← Real-time dashboards
-                                                     AI Inference ← Ray Serve on GPU nodes
-                                                     Istio Service Mesh (mTLS)
+Robots (playground) → gRPC → Ingestion Service → Kafka → Processor → Storage (Postgres/Redis/S3)
+                                                                        ↓
+                                                               REST API ← Developer SDKs
+                                                               WebSocket ← Real-time dashboards
+                                                               Inference ← SB3 PPO policy serving
+                                                               Temporal ← Durable command workflows
+                                                               Istio Service Mesh (mTLS)
 ```
 
-Five services:
-- **simulator** (`cmd/simulator/`) — emits telemetry for N humanoid robots
-- **ingestion** (`cmd/ingestion/`) — gRPC server → Kafka producer
+Five services (platform only — simulator lives in `playground/`):
+- **ingestion** (`cmd/ingestion/`) — gRPC server → Kafka producer, bridges Redis commands → gRPC StreamCommands
 - **api** (`cmd/api/`) — REST API + WebSocket + auth + rate limiting + billing
-- **processor** (`cmd/processor/`) — Kafka consumer → Postgres/Redis
-- **inference** (`inference/`) — Python diffusion policy pipeline (GR00T-N1 compatible)
+- **processor** (`cmd/processor/`) — Kafka consumer → Postgres/Redis/S3
+- **worker** (`cmd/worker/`) — Temporal worker (command, deployment, billing workflows)
+- **inference** (`../playground/inference/`, deployed in platform stack) — SB3 PPO policy serving, loads models from S3
 
 ## Quick Commands
 
 ```bash
+# Start both platform + playground from repo root
+../start.sh
+
+# Start platform only
+docker compose up -d
+# Or: ../start.sh --platform
+
 # Build all services
 make build
 
@@ -36,14 +44,6 @@ go test -race -coverprofile=coverage.out ./...
 
 # Lint
 make lint
-
-# Run locally with Docker Compose (starts Postgres, Redis, Kafka, Prometheus, Grafana)
-docker compose up -d
-
-# Run individual services locally
-make run-ingestion   # starts gRPC server on :50051
-make run-api         # starts HTTP server on :8080
-make run-simulator   # starts 5 simulated robots pointing at localhost:50051
 
 # Generate protobuf code after editing .proto files
 make proto
@@ -60,7 +60,6 @@ make helm-install
 | Path | Purpose |
 |------|---------|
 | `cmd/` | Service entry points (main.go files) |
-| `internal/simulator/` | Robot physics simulation, fleet management |
 | `internal/ingestion/` | gRPC telemetry handler, Kafka producer/consumer |
 | `internal/api/` | Thin HTTP handlers + WebSocket (no business logic) |
 | `internal/service/` | Business logic layer (accepts interfaces, owns domain logic) |
@@ -75,10 +74,11 @@ make helm-install
 | `migrations/` | PostgreSQL DDL migrations |
 | `deploy/` | Docker, Helm, Terraform, Kubernetes configs |
 | `observability/` | Prometheus, Grafana, alerting configs |
-| `inference/` | Python inference service (diffusion policy, GR00T-N1 compatible) |
+| `../playground/inference/` | SB3 PPO inference service (deployed in platform stack) |
 | `sdk/python/` | Python SDK (zero-dependency, typed) |
 | `sdk/typescript/` | TypeScript SDK (typed interfaces) |
-| `ros2_bridge/` | ROS 2 bridge node (Python, publishes to standard topics) |
+| `training/` | Model training pipelines |
+| `analytics/` | Spark analytics pipeline |
 | `test/integration/` | Integration tests (gRPC, HTTP, WebSocket) |
 | `docs/` | OpenAPI spec, architecture diagrams |
 

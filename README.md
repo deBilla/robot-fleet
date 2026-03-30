@@ -34,6 +34,7 @@ robot-fleet/
 - **Developer API Platform** -- REST, WebSocket, and gRPC APIs with OpenAPI 3.1 spec, TypeScript + Python SDKs
 - **Multi-tenant Auth & Billing** -- JWT + OAuth2/OIDC + API key authentication, RBAC (4 roles), per-tenant rate limiting, usage metering, 3-tier pricing (free/pro/enterprise)
 - **AI Inference** -- 4-stage diffusion policy pipeline (Vision Encoder -> Language Encoder -> Cross-Attention -> Diffusion Policy), GR00T-N1 compatible
+- **Durable Command Pipeline** -- Commands flow through Kafka (`robot.commands`) into Temporal workflows with full audit trail, ack tracking, and automatic retries. Supports fleet-wide dispatch.
 - **Semantic Commands** -- Natural language robot control via extensible command registry (strategy pattern)
 - **Model Registry** -- Model lifecycle management (staged -> canary -> deployed -> archived) with S3 artifact storage
 - **FAISS Vector Search** -- Semantic search over robot fleet state ("find robots with low battery near warehouse")
@@ -93,13 +94,11 @@ AWS Managed: RDS Postgres (Multi-AZ, encrypted), ElastiCache Redis (HA),
 - Docker & Docker Compose
 - Protocol Buffers compiler (`protoc`)
 
-### Run Platform Locally
+### Run Everything (Recommended)
 
 ```bash
-cd platform
-
-# Start everything
-docker compose up -d
+# Start both platform and playground from repo root
+./start.sh
 
 # Verify
 curl http://localhost:8080/healthz
@@ -107,18 +106,25 @@ curl http://localhost:8080/healthz
 # List robots
 curl -H "X-API-Key: dev-key-001" http://localhost:8080/api/v1/robots
 
-# Run tests
-go test -race ./internal/... ./test/...
+# Stop everything
+./start.sh down
 ```
 
-### Run Playground Locally
+### Run Individually
 
 ```bash
-cd playground
+# Platform only
+./start.sh --platform
 
-docker compose up -d
+# Playground only (start platform first)
+./start.sh --playground
 
-# Web UI at http://localhost:5173
+# Or use docker compose directly
+cd platform && docker compose up -d
+cd playground && docker compose up -d
+
+# Run tests
+cd platform && go test -race ./internal/... ./test/...
 ```
 
 ## API Endpoints
@@ -129,7 +135,7 @@ docker compose up -d
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/v1/robots` | List robots (paginated) |
 | `GET` | `/api/v1/robots/{id}` | Get robot (Redis hot state -> Postgres fallback) |
-| `POST` | `/api/v1/robots/{id}/command` | Send command (move, dance, wave, stop...) |
+| `POST` | `/api/v1/robots/{id}/command` | Send command via Kafka -> Temporal workflow |
 | `POST` | `/api/v1/robots/{id}/semantic-command` | Natural language command |
 | `GET` | `/api/v1/robots/{id}/telemetry` | Latest telemetry from Redis |
 | `POST` | `/api/v1/inference` | AI inference (diffusion policy) |
@@ -172,7 +178,8 @@ go test -race -coverprofile=coverage.out ./...
 | Layer | Technologies |
 |-------|-------------|
 | Backend | Go 1.26, gRPC, Protocol Buffers, net/http |
-| AI/ML | Python, NumPy, FAISS, Diffusion Policy (DDPM) |
+| Orchestration | Temporal (durable command workflows, deployment pipelines) |
+| AI/ML | Python, NumPy, FAISS, SB3 PPO Policy |
 | Messaging | Kafka (Confluent), gRPC bidirectional streaming |
 | Storage | PostgreSQL 16, Redis 7, MinIO (S3), ClickHouse |
 | Analytics | Apache Spark (PySpark), ClickHouse (OLAP) |
@@ -189,7 +196,12 @@ go test -race -coverprofile=coverage.out ./...
 ### Docker Compose (local dev)
 
 ```bash
+# Both stacks from repo root
+./start.sh
+
+# Or individually
 cd platform && docker compose up -d
+cd playground && docker compose up -d
 ```
 
 ### Kubernetes (Helm + Istio)

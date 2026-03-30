@@ -1,15 +1,18 @@
 # FleetOS
 
-A distributed robot fleet management platform that connects simulated humanoid robots to the cloud via gRPC/Kafka, exposes developer-facing REST/WebSocket APIs with auth and billing, serves AI inference through a diffusion policy pipeline, and provides full-stack analytics via Spark + ClickHouse.
+A distributed robot fleet management platform following the **Menlo OS architecture**: high-level reasoning happens in the platform (cloud); robots handle execution only. Robots connect via gRPC to send telemetry and receive commands. The platform runs inference, manages model lifecycle (staged → canary → deployed), and provides developer-facing REST/WebSocket APIs with auth, billing, and full-stack analytics.
 
 ## Features
 
 - **Real-time Telemetry Pipeline** -- Humanoid robots stream 20-DOF joint states, LiDAR, video, and audio over gRPC into Kafka, processed into Redis (hot state) + S3 (raw storage)
 - **Developer API Platform** -- REST, WebSocket, and gRPC APIs with OpenAPI 3.1 spec, TypeScript + Python SDKs
 - **Multi-tenant Auth & Billing** -- JWT + OAuth2/OIDC + API key authentication, RBAC (4 roles), per-tenant rate limiting, usage metering, 3-tier pricing (free/pro/enterprise)
-- **AI Inference** -- 4-stage diffusion policy pipeline (Vision Encoder -> Language Encoder -> Cross-Attention -> Diffusion Policy), GR00T-N1 compatible
+- **AI Inference** -- SB3 PPO policy serving with instruction bias, loads models from S3/MinIO, hot-swaps on deployment
+- **Durable Command Pipeline** -- Commands published to Kafka (`robot.commands`), consumed by processor, orchestrated via Temporal workflows with audit trail, ack tracking, retries, and timeout handling
 - **Semantic Commands** -- Natural language robot control via extensible command registry (strategy pattern)
-- **Model Registry** -- Model lifecycle management (staged -> canary -> deployed -> archived) with S3 artifact storage
+- **Model Registry** -- Model lifecycle management (staged -> canary -> deployed -> archived) with S3 artifact storage, canary deployment via Temporal workflows
+- **gRPC Command Bridge** -- Ingestion service bridges Redis commands to gRPC `StreamCommands` for robots (robots never access Redis directly)
+- **Temporal Workflow Orchestration** -- Command dispatch, model deployment, agent deployment, and webhook delivery all run as durable Temporal workflows with full visibility via Temporal UI
 - **FAISS Vector Search** -- Semantic search over robot fleet state ("find robots with low battery near warehouse")
 - **Analytics Pipeline** -- S3 (raw NDJSON) -> Spark (batch) -> ClickHouse (OLAP) -> Redis (cache) -> API
 - **ROS 2 Integration** -- Bridge node publishing to standard ROS 2 topics (JointState, PoseStamped, BatteryState, LaserScan)
@@ -69,8 +72,10 @@ AWS Managed: RDS Postgres (Multi-AZ, encrypted), ElastiCache Redis (HA),
 ### Run Locally
 
 ```bash
-# Start everything (Postgres, Redis, Kafka, MinIO, ClickHouse, Spark,
-# Prometheus, Grafana, API, Ingestion, Processor, Simulator, Inference, Web)
+# From repo root — start both platform and playground
+../start.sh
+
+# Or start platform only
 docker compose up -d
 
 # Verify
@@ -118,7 +123,7 @@ open http://localhost:8123   # ClickHouse (direct SQL)
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/v1/robots` | List robots (paginated) |
 | `GET` | `/api/v1/robots/{id}` | Get robot (Redis hot state -> Postgres fallback) |
-| `POST` | `/api/v1/robots/{id}/command` | Send command (move, dance, wave, stop...) |
+| `POST` | `/api/v1/robots/{id}/command` | Send command via Kafka -> Temporal workflow |
 | `POST` | `/api/v1/robots/{id}/semantic-command` | Natural language command |
 | `GET` | `/api/v1/robots/{id}/telemetry` | Latest telemetry from Redis |
 | `POST` | `/api/v1/inference` | AI inference (diffusion policy) |
@@ -166,25 +171,56 @@ Robots -> gRPC stream -> Ingestion -> Kafka (partitioned by robot_id)
 - ClickHouse handles analytical queries (pre-aggregated by Spark)
 - Redis serves hot state + caches OLAP results for sub-ms API latency
 
+## Command Pipeline (Kafka + Temporal)
+
+```
+REST API /command ──┐
+                    ├──> Kafka (robot.commands) ──> Processor ──> Temporal Workflow
+REST API /inference ┘    (JSON, keyed by robot_id)                     |
+                                                         ┌─────────────┼─────────────┐
+                                                         v             v             v
+                                                    WriteAudit    [RunInference]  PublishCommand
+                                                    (Postgres)     (optional)     (Redis pub/sub)
+                                                                                      |
+                                                                          gRPC StreamCommands -> Robot
+                                                                                      |
+                                                                          Ack -> AckBridge -> Signal Workflow
+```
+
+**Workflow lifecycle:** requested -> dispatched -> acked/timeout
+
+Commands and inference results both flow through this pipeline, giving every robot interaction a durable Temporal workflow with:
+- Full audit trail in Postgres
+- Ack tracking with 30s timeout
+- Automatic retries (3 attempts)
+- Visibility in Temporal UI (http://localhost:8233)
+- Idempotency via deterministic workflow IDs
+
+When `with_inference=true`, the workflow calls the inference service before dispatching. Known locomotion commands (walk, wave, dance, etc.) are resolved to command types directly; unknown instructions use the model's predicted joint torques.
+
 ## AI Inference Pipeline
 
-The inference service implements a simplified GR00T-N1 compatible pipeline:
+The inference service runs as a platform service (not on the robot), following the Menlo OS pattern where robots only execute — all reasoning is cloud-side.
 
 ```
-Image (224x224) + Instruction ("wave hello")
+Instruction ("wave hello") + Optional observation (376-dim MuJoCo state)
     |
-Stage 1: Vision Encoder -- 196 patches (14x14) -> (196, 512) embeddings
+SB3 PPO Policy -- predict() → 17-dim MuJoCo action vector
     |
-Stage 2: Language Encoder -- tokens -> (seq_len, 512) embeddings
+Instruction Bias -- overlay command-specific joint targets (wave, dance, walk...)
     |
-Stage 3: Cross-Attention -- fuse vision + language -> (1024,) condition vector
+MuJoCo-to-Fleet Mapping -- 17 actuators → 20 joint schema
     |
-Stage 4: Diffusion Policy -- 10 DDPM denoising steps -> (16, 20) action trajectory
+Output: 20 joint actions (position, velocity, torque)
     |
-Output: 20 joint actions (position, velocity, torque) x 16 timesteps
+API publishes CommandMessage to Kafka (robot.commands)
+    |
+Processor starts Temporal workflow → Redis → Ingestion → gRPC StreamCommands
 ```
 
-Watch the pipeline stages: `docker logs -f robot-fleet-inference-1`
+**Model lifecycle**: Training (`platform/training/`) → S3 upload → Model Registry (staged → canary → deployed) → Inference hot-swaps model from S3.
+
+Watch inference: `docker logs -f platform-inference-1`
 
 ## Testing
 
@@ -222,12 +258,12 @@ go test -race -coverprofile=coverage.out ./...
 ## Project Structure
 
 ```
-robot-fleet/
+platform/
 +-- cmd/                        # Service entry points
 |   +-- api/                    # REST API + WebSocket server
 |   +-- ingestion/              # gRPC telemetry receiver
-|   +-- processor/              # Kafka consumer -> S3 + Redis + Postgres
-|   +-- simulator/              # Humanoid robot fleet simulator
+|   +-- processor/              # Kafka consumer (telemetry + commands -> Temporal)
+|   +-- worker/                 # Temporal worker (command, deployment, webhook workflows)
 +-- internal/                   # Core Go packages
 |   +-- api/                    # Thin HTTP handlers (no business logic)
 |   +-- service/                # Business logic layer (interfaces only)
@@ -242,11 +278,10 @@ robot-fleet/
 |   +-- auth/                   # JWT, API keys, OAuth2/OIDC, RBAC
 |   +-- middleware/             # Rate limiting, metrics, logging, CORS, tracing
 |   +-- store/                  # PostgreSQL, Redis, S3, ClickHouse (interfaces)
-|   +-- simulator/              # 20-DOF humanoid physics, fleet management
+|   +-- temporal/               # Temporal client, workflows, activities, ack bridge
 |   +-- config/                 # Environment-based configuration
-+-- inference/                  # Python inference service
-|   +-- server.py               # 4-stage diffusion pipeline
-|   +-- vector_search.py        # FAISS semantic search
++-- ../playground/inference/     # Python inference service (deployed in platform stack)
+|   +-- server.py               # SB3 PPO policy serving + instruction bias
 +-- analytics/                  # Spark analytics
 |   +-- telemetry_analytics.py  # PySpark batch job (S3 -> ClickHouse)
 |   +-- clickhouse-init.sql     # OLAP schema
@@ -272,7 +307,8 @@ robot-fleet/
 | Layer | Technologies |
 |-------|-------------|
 | Backend | Go 1.26, gRPC, Protocol Buffers, net/http |
-| AI/ML | Python, NumPy, FAISS, Diffusion Policy (DDPM) |
+| Orchestration | Temporal (durable command workflows, deployment pipelines) |
+| AI/ML | Python, NumPy, FAISS, SB3 PPO Policy |
 | Messaging | Kafka (Confluent), gRPC bidirectional streaming |
 | Storage | PostgreSQL 16, Redis 7, MinIO (S3), ClickHouse |
 | Analytics | Apache Spark (PySpark), ClickHouse (OLAP) |
@@ -289,7 +325,11 @@ robot-fleet/
 ### Docker Compose (local dev)
 
 ```bash
-docker compose up -d   # 17 services
+# Both stacks from repo root
+../start.sh
+
+# Platform only
+docker compose up -d
 ```
 
 ### Kubernetes (Helm + Istio)
@@ -317,6 +357,7 @@ Provisions: VPC (3 AZ), EKS (general + GPU + Kafka nodes), RDS PostgreSQL (Multi
 | Web Playground | http://localhost:5173 | Interactive robot dashboard |
 | Grafana | http://localhost:3000 | Metrics dashboards (admin/admin) |
 | Prometheus | http://localhost:9090 | Time-series metrics |
+| Temporal UI | http://localhost:8233 | Workflow execution history |
 | Spark UI | http://localhost:8088 | Spark job monitoring |
 | MinIO Console | http://localhost:9001 | S3 object browser (fleetos/fleetos123) |
 | ClickHouse | http://localhost:8123 | Direct SQL analytics |

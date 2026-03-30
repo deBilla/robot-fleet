@@ -2,36 +2,60 @@
 
 ## Project Overview
 
-FleetOS is a distributed robot fleet management platform organized as a monorepo. It simulates humanoid robots, ingests their telemetry via gRPC/Kafka, serves a REST/WebSocket API with auth and billing, and provides AI inference capabilities.
+FleetOS is a distributed robot fleet management platform organized as a monorepo, following the **Menlo OS architecture**: high-level reasoning happens in the platform (cloud); robots handle execution only. The platform ingests telemetry via gRPC/Kafka, runs AI inference, manages model lifecycle, and sends commands back to robots via gRPC.
 
 ## Monorepo Layout
 
-- `platform/` — Core FleetOS backend (Go services, analytics, infra, SDKs, training)
-- `playground/` — Standalone playground app (Go backend + React frontend + inference)
+- `platform/` — Cloud brain: Go services, inference, model registry, training, analytics, infra, SDKs
+- `playground/` — Robot simulator: MuJoCo physics, telemetry sender, command executor (no reasoning)
 
 All Go platform code lives under `platform/`. The Go module root is `platform/go.mod`.
 
-## Architecture
+## Architecture (Menlo OS Pattern)
 
 ```
-Simulated Robots (Go) → gRPC → Ingestion Service → Kafka → Storage (Postgres/Redis/S3)
-                                                              ↓
-                                                     REST API ← Developer SDKs
-                                                     WebSocket ← Real-time dashboards
-                                                     AI Inference ← Ray Serve on GPU nodes
-                                                     Istio Service Mesh (mTLS)
+┌─ Playground (Robot) ─────────────────────────────┐
+│  Simulator (MuJoCo Humanoid-v4 physics)          │
+│    ├─ gRPC StreamTelemetry → ingestion:50051     │  (send sensors)
+│    ├─ gRPC StreamCommands ← ingestion:50051      │  (receive actions)
+│    └─ HTTP :8085 /spawn, /robots                 │  (local control)
+│  Web UI → api:8080                               │  (HTTP to platform)
+└──────────────────────────────────────────────────┘
+
+┌─ Platform (Cloud Brain) ─────────────────────────┐
+│  Ingestion (gRPC :50051)                         │
+│    ├─ StreamTelemetry → Kafka → Processor        │
+│    └─ StreamCommands ← Redis commands bridge     │
+│  API (:8080) — REST + WebSocket + auth + billing │
+│  Inference (:8081) — SB3 PPO policy serving      │
+│    ├─ Loads model from MinIO (S3)                │
+│    └─ Polls model registry for deployments       │
+│  Training (manual) → MinIO → Model Registry      │
+│  Processor → Postgres/Redis/S3                   │
+└──────────────────────────────────────────────────┘
 ```
 
-Five services:
-- **simulator** (`platform/cmd/simulator/`) — emits telemetry for N humanoid robots
-- **ingestion** (`platform/cmd/ingestion/`) — gRPC server → Kafka producer
+Six services:
+- **simulator** (`playground/simulator/`) — MuJoCo physics, sends telemetry via gRPC, receives commands via gRPC
+- **ingestion** (`platform/cmd/ingestion/`) — gRPC server → Kafka producer, bridges Redis commands → gRPC StreamCommands
 - **api** (`platform/cmd/api/`) — REST API + WebSocket + auth + rate limiting + billing
-- **processor** (`platform/cmd/processor/`) — Kafka consumer → Postgres/Redis
-- **inference** (`playground/inference/`) — Python diffusion policy pipeline (GR00T-N1 compatible)
+- **processor** (`platform/cmd/processor/`) — Kafka consumer → Postgres/Redis/S3
+- **inference** (`playground/inference/`, deployed in platform stack) — SB3 PPO policy serving, loads models from S3
+- **training** (`platform/training/`) — Manual training pipelines, uploads to S3
 
 ## Quick Commands
 
 ```bash
+# Start both stacks from repo root
+./start.sh
+
+# Start/stop individual stacks
+./start.sh --platform
+./start.sh --playground
+./start.sh down
+
+# Other start.sh commands: restart, logs, ps
+
 # Build all platform services
 cd platform && make build
 
@@ -43,12 +67,6 @@ cd platform && go test -race -coverprofile=coverage.out ./...
 
 # Lint
 cd platform && make lint
-
-# Run platform locally with Docker Compose
-cd platform && docker compose up -d
-
-# Run playground locally
-cd playground && docker compose up -d
 
 # Generate protobuf code after editing .proto files
 cd platform && make proto
@@ -85,7 +103,10 @@ cd platform && make helm-install
 | `platform/training/` | Model training pipelines |
 | `platform/analytics/` | Spark analytics pipeline |
 | `platform/docs/` | OpenAPI spec, architecture diagrams |
-| `playground/` | Standalone playground (Go + React + inference) |
+| `playground/simulator/` | MuJoCo robot simulator (Python) — physics + telemetry + command execution |
+| `playground/inference/` | SB3 PPO inference service (Python) — deployed in platform stack |
+| `playground/web/` | React frontend for robot dashboard |
+| `playground/proto/` | Protobuf definitions (playground copy, stubs generated at Docker build) |
 
 ## Go Best Practices (MUST FOLLOW)
 
