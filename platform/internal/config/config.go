@@ -20,10 +20,13 @@ type Config struct {
 	HTTPPort int
 
 	// Kafka
-	KafkaBrokers       []string
-	KafkaTelemetryTopic string
-	KafkaCommandTopic   string
-	KafkaGroupID        string
+	KafkaBrokers              []string
+	KafkaTelemetryTopic       string
+	KafkaCommandTopic         string
+	KafkaCommandDispatchTopic string // Temporal → ingestion (commands to robots)
+	KafkaCommandAcksTopic     string // ingestion → Temporal (robot acknowledgments)
+	KafkaDeploymentEventTopic string // Temporal activities → SSE consumers
+	KafkaGroupID              string
 
 	// PostgreSQL
 	PostgresDSN string
@@ -32,10 +35,6 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
-
-	// Simulator
-	SimRobotCount    int
-	SimTickInterval  time.Duration
 
 	// Inference
 	InferenceEndpoint string
@@ -75,15 +74,16 @@ func Load() *Config {
 		GRPCPort:            getEnvInt("GRPC_PORT", 50051),
 		HTTPPort:            getEnvInt("HTTP_PORT", 8080),
 		KafkaBrokers:        []string{getEnv("KAFKA_BROKERS", "localhost:9092")},
-		KafkaTelemetryTopic: getEnv("KAFKA_TELEMETRY_TOPIC", "robot.telemetry"),
-		KafkaCommandTopic:   getEnv("KAFKA_COMMAND_TOPIC", "robot.commands"),
-		KafkaGroupID:        getEnv("KAFKA_GROUP_ID", "fleetos-ingestion"),
+		KafkaTelemetryTopic:       getEnv("KAFKA_TELEMETRY_TOPIC", "robot.telemetry"),
+		KafkaCommandTopic:         getEnv("KAFKA_COMMAND_TOPIC", "robot.commands"),
+		KafkaCommandDispatchTopic: getEnv("KAFKA_COMMAND_DISPATCH_TOPIC", "robot.commands.dispatch"),
+		KafkaCommandAcksTopic:     getEnv("KAFKA_COMMAND_ACKS_TOPIC", "robot.command-acks"),
+		KafkaDeploymentEventTopic: getEnv("KAFKA_DEPLOYMENT_EVENT_TOPIC", "deployment.events"),
+		KafkaGroupID:              getEnv("KAFKA_GROUP_ID", "fleetos-ingestion"),
 		PostgresDSN:         getEnv("POSTGRES_DSN", "postgres://fleetos:fleetos@localhost:5432/fleetos?sslmode=disable"),
 		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:       getEnv("REDIS_PASSWORD", ""),
 		RedisDB:             getEnvInt("REDIS_DB", 0),
-		SimRobotCount:       getEnvInt("SIM_ROBOT_COUNT", 10),
-		SimTickInterval:     time.Duration(getEnvInt("SIM_TICK_MS", 100)) * time.Millisecond,
 		S3Endpoint:          getEnv("S3_ENDPOINT", "localhost:9000"),
 		S3Bucket:            getEnv("S3_BUCKET", "fleetos-telemetry"),
 		S3AccessKey:         getEnv("S3_ACCESS_KEY", "fleetos"),

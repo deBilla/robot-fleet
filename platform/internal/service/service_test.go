@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/dimuthu/robot-fleet/internal/command"
+	"github.com/dimuthu/robot-fleet/internal/middleware"
 	"github.com/dimuthu/robot-fleet/internal/store"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -56,6 +59,25 @@ func (m *mockRepo) ListCommandAudit(_ context.Context, _, _ string, _ int) ([]*s
 }
 func (m *mockRepo) UpdateCommandAuditStatus(_ context.Context, _, _ string) error {
 	return m.err
+}
+func (m *mockRepo) ListAllActiveRobots(_ context.Context, since time.Time, limit int) ([]*store.RobotRecord, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var result []*store.RobotRecord
+	for _, r := range m.robots {
+		if r.LastSeen.After(since) || r.LastSeen.Equal(since) {
+			result = append(result, r)
+			if len(result) >= limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+func (m *mockRepo) UpdateRobotInferenceModel(_ context.Context, _, _ string) error { return m.err }
+func (m *mockRepo) ListRobotsByInferenceModel(_ context.Context, _ string) ([]*store.RobotRecord, error) {
+	return nil, m.err
 }
 func (m *mockRepo) Close() {}
 
@@ -109,6 +131,21 @@ func (m *mockCache) GetCacheJSON(_ context.Context, key string) ([]byte, error) 
 func (m *mockCache) CheckCommandDedup(_ context.Context, _ string) (int64, error) { return 0, nil }
 func (m *mockCache) SetCommandDedup(_ context.Context, _ string, _ int64) error   { return nil }
 func (m *mockCache) Close() {}
+
+type mockCommandProducer struct {
+	messages [][]byte
+	keys     []string
+	err      error
+}
+
+func (m *mockCommandProducer) Publish(robotID string, data []byte) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.keys = append(m.keys, robotID)
+	m.messages = append(m.messages, data)
+	return nil
+}
 
 // --- Robot Service Tests ---
 
@@ -202,11 +239,13 @@ func TestGetTelemetry(t *testing.T) {
 }
 
 func TestGetFleetMetrics(t *testing.T) {
+	recent := time.Now().Add(-1 * time.Minute)
+	stale := time.Now().Add(-10 * time.Minute)
 	repo := &mockRepo{robots: []*store.RobotRecord{
-		{ID: "r1", Status: "active", BatteryLevel: 0.8},
-		{ID: "r2", Status: "active", BatteryLevel: 0.6},
-		{ID: "r3", Status: "charging", BatteryLevel: 0.3},
-		{ID: "r4", Status: "error", BatteryLevel: 0.1},
+		{ID: "r1", Status: "active", BatteryLevel: 0.8, LastSeen: recent},
+		{ID: "r2", Status: "active", BatteryLevel: 0.6, LastSeen: recent},
+		{ID: "r3", Status: "charging", BatteryLevel: 0.3, LastSeen: recent},
+		{ID: "r4", Status: "error", BatteryLevel: 0.1, LastSeen: recent},
 	}}
 	svc := NewRobotService(repo, newMockCache(), command.DefaultRegistry(), "", 0)
 
@@ -225,6 +264,69 @@ func TestGetFleetMetrics(t *testing.T) {
 	}
 	if metrics.ErrorRobots != 1 {
 		t.Errorf("expected 1 error, got %d", metrics.ErrorRobots)
+	}
+
+	// Stale robots should be excluded from fleet metrics.
+	repo.robots = []*store.RobotRecord{
+		{ID: "r1", Status: "active", BatteryLevel: 0.9, LastSeen: recent},
+		{ID: "r2", Status: "active", BatteryLevel: 0.5, LastSeen: stale},
+		{ID: "r3", Status: "idle", BatteryLevel: 0.4, LastSeen: stale},
+	}
+	metrics, err = svc.GetFleetMetrics(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if metrics.TotalRobots != 1 {
+		t.Errorf("expected 1 active total (stale excluded), got %d", metrics.TotalRobots)
+	}
+	if metrics.ActiveRobots != 1 {
+		t.Errorf("expected 1 active, got %d", metrics.ActiveRobots)
+	}
+	if metrics.AvgBattery != 0.9 {
+		t.Errorf("expected avg battery 0.9, got %f", metrics.AvgBattery)
+	}
+}
+
+func TestRefreshFleetGauges(t *testing.T) {
+	recent := time.Now().Add(-1 * time.Minute)
+	stale := time.Now().Add(-10 * time.Minute)
+	repo := &mockRepo{robots: []*store.RobotRecord{
+		{ID: "r1", Status: "active", BatteryLevel: 0.8, LastSeen: recent},
+		{ID: "r2", Status: "idle", BatteryLevel: 0.6, LastSeen: recent},
+		{ID: "r3", Status: "error", BatteryLevel: 0.2, LastSeen: stale},
+	}}
+	svc := NewRobotService(repo, newMockCache(), command.DefaultRegistry(), "", 0)
+
+	if err := svc.RefreshFleetGauges(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify all Prometheus gauges were set (only r1 and r2 are active).
+	total := testutil.ToFloat64(middleware.RobotsTotal)
+	if total != 2 {
+		t.Errorf("expected RobotsTotal=2, got %f", total)
+	}
+	active := testutil.ToFloat64(middleware.RobotsActive)
+	if active != 1 {
+		t.Errorf("expected RobotsActive=1, got %f", active)
+	}
+	errored := testutil.ToFloat64(middleware.RobotsError)
+	if errored != 0 {
+		t.Errorf("expected RobotsError=0 (stale excluded), got %f", errored)
+	}
+	avgBattery := testutil.ToFloat64(middleware.AvgBatteryLevel)
+	expected := (0.8 + 0.6) / 2.0
+	if avgBattery != expected {
+		t.Errorf("expected AvgBatteryLevel=%f, got %f", expected, avgBattery)
+	}
+}
+
+func TestRefreshFleetGauges_RepoError(t *testing.T) {
+	repo := &mockRepo{err: ErrNotFound}
+	svc := NewRobotService(repo, newMockCache(), command.DefaultRegistry(), "", 0)
+
+	if err := svc.RefreshFleetGauges(context.Background()); err == nil {
+		t.Fatal("expected error from repo, got nil")
 	}
 }
 
@@ -246,6 +348,63 @@ func TestSendCommand(t *testing.T) {
 	}
 	if len(cache.published) != 1 || cache.published[0] != "commands:r1" {
 		t.Errorf("expected publish to commands:r1, got %v", cache.published)
+	}
+}
+
+func TestSendCommand_ViaKafka(t *testing.T) {
+	producer := &mockCommandProducer{}
+	cache := newMockCache()
+	svc := NewRobotService(&mockRepo{}, cache, command.DefaultRegistry(), "", 0, WithCommandProducer(producer))
+
+	result, err := svc.SendCommand(context.Background(), "r1", "wave", map[string]any{}, "tenant-dev")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "queued" {
+		t.Errorf("expected queued, got %s", result.Status)
+	}
+
+	// Verify message was published to Kafka, not Redis
+	if len(producer.messages) != 1 {
+		t.Fatalf("expected 1 Kafka message, got %d", len(producer.messages))
+	}
+	if producer.keys[0] != "r1" {
+		t.Errorf("expected Kafka key=r1, got %s", producer.keys[0])
+	}
+	if len(cache.published) != 0 {
+		t.Errorf("expected no Redis publish when Kafka available, got %v", cache.published)
+	}
+
+	// Verify message format
+	var msg CommandMessage
+	if err := json.Unmarshal(producer.messages[0], &msg); err != nil {
+		t.Fatalf("failed to unmarshal Kafka message: %v", err)
+	}
+	if msg.RobotID != "r1" {
+		t.Errorf("expected robot_id=r1, got %s", msg.RobotID)
+	}
+	if msg.CmdType != "wave" {
+		t.Errorf("expected cmd_type=wave, got %s", msg.CmdType)
+	}
+	if msg.TenantID != "tenant-dev" {
+		t.Errorf("expected tenant_id=tenant-dev, got %s", msg.TenantID)
+	}
+}
+
+func TestSendCommand_KafkaFallbackToLegacy(t *testing.T) {
+	// No Kafka producer, no Temporal → should fall back to Redis pub/sub
+	cache := newMockCache()
+	svc := NewRobotService(&mockRepo{}, cache, command.DefaultRegistry(), "", 0)
+
+	result, err := svc.SendCommand(context.Background(), "r1", "dance", map[string]any{}, "tenant-dev")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "queued" {
+		t.Errorf("expected queued, got %s", result.Status)
+	}
+	if len(cache.published) != 1 || cache.published[0] != "commands:r1" {
+		t.Errorf("expected Redis fallback publish, got %v", cache.published)
 	}
 }
 

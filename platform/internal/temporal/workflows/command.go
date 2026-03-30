@@ -12,12 +12,15 @@ import (
 
 // CommandWorkflowInput is the input for CommandDispatchWorkflow.
 type CommandWorkflowInput struct {
-	RobotID   string         `json:"robot_id"`
-	CommandID int64          `json:"command_id"`
-	CmdType   string         `json:"cmd_type"`
-	Params    map[string]any `json:"params"`
-	TenantID  string         `json:"tenant_id"`
-	DedupKey  string         `json:"dedup_key"`
+	RobotID              string         `json:"robot_id"`
+	CommandID            int64          `json:"command_id"`
+	CmdType              string         `json:"cmd_type"`
+	Params               map[string]any `json:"params"`
+	TenantID             string         `json:"tenant_id"`
+	DedupKey             string         `json:"dedup_key"`
+	WithInference        bool           `json:"with_inference,omitempty"`
+	InferenceInstruction string         `json:"inference_instruction,omitempty"`
+	InferenceModelID     string         `json:"inference_model_id,omitempty"`
 }
 
 // CommandWorkflowResult is the output of CommandDispatchWorkflow.
@@ -56,7 +59,30 @@ func CommandDispatchWorkflow(ctx workflow.Context, input CommandWorkflowInput) (
 		return nil, fmt.Errorf("write audit: %w", err)
 	}
 
-	// Step 2: Publish command to Redis pub/sub (bridges to gRPC stream on ingestion)
+	// Step 2 (optional): Run inference to resolve command type and params
+	if input.WithInference {
+		inferCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 30 * time.Second,
+			RetryPolicy: &temporal.RetryPolicy{
+				InitialInterval:    time.Second,
+				BackoffCoefficient: 2.0,
+				MaximumAttempts:    3,
+			},
+		})
+		var inferResult activities.InferenceResult
+		err = workflow.ExecuteActivity(inferCtx, "RunInference", activities.InferenceInput{
+			Instruction: input.InferenceInstruction,
+			ModelID:     input.InferenceModelID,
+		}).Get(ctx, &inferResult)
+		if err != nil {
+			_ = workflow.ExecuteActivity(actCtx, "UpdateCommandAuditStatus", input.CommandID, "inference_failed").Get(ctx, nil)
+			return &CommandWorkflowResult{CommandID: input.CommandID, Status: "failed", RobotID: input.RobotID}, err
+		}
+		input.CmdType = inferResult.CmdType
+		input.Params = inferResult.Params
+	}
+
+	// Step 3: Publish command to Redis pub/sub (bridges to gRPC stream on ingestion)
 	workflowID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	err = workflow.ExecuteActivity(actCtx, "PublishCommand", activities.PublishCommandInput{
 		RobotID:    input.RobotID,

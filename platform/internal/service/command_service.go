@@ -32,13 +32,39 @@ func (s *robotService) SendCommand(ctx context.Context, robotID, cmdType string,
 
 	dedupKey := commandDedupKey(robotID, cmdType, params)
 
-	// Temporal path: durable command orchestration with built-in dedup
+	// Kafka path: publish to robot.commands topic → processor starts Temporal workflow
+	if s.commandProducer != nil {
+		return s.sendCommandViaKafka(ctx, robotID, cmdType, params, tenantID, dedupKey)
+	}
+
+	// Temporal direct path: start workflow without Kafka
 	if s.temporalClient != nil {
 		return s.sendCommandViaTemporal(ctx, robotID, cmdType, params, tenantID, dedupKey)
 	}
 
 	// Legacy path: Redis pub/sub (fire-and-forget)
 	return s.sendCommandLegacy(ctx, robotID, cmdType, params, tenantID, dedupKey)
+}
+
+func (s *robotService) sendCommandViaKafka(ctx context.Context, robotID, cmdType string, params map[string]any, tenantID, dedupKey string) (*CommandResult, error) {
+	commandID := time.Now().UnixNano()
+	msg := CommandMessage{
+		RobotID:   robotID,
+		CommandID: commandID,
+		CmdType:   cmdType,
+		Params:    params,
+		TenantID:  tenantID,
+		DedupKey:  dedupKey,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal command message: %w", err)
+	}
+	if err := s.commandProducer.Publish(robotID, data); err != nil {
+		return nil, fmt.Errorf("publish command to kafka: %w", err)
+	}
+	middleware.CommandsDispatched.WithLabelValues(cmdType, "queued").Inc()
+	return &CommandResult{CommandID: commandID, Status: "queued", RobotID: robotID}, nil
 }
 
 func (s *robotService) sendCommandViaTemporal(ctx context.Context, robotID, cmdType string, params map[string]any, tenantID, dedupKey string) (*CommandResult, error) {

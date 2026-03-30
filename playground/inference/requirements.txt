@@ -1,1 +1,5 @@
 numpy>=1.24
+redis>=5.0
+stable-baselines3>=2.3.0
+gymnasium[mujoco]>=1.0.0
+minio>=7.2.0

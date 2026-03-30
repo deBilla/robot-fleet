@@ -2,144 +2,42 @@ package service
 
 import (
 	"context"
-	"fmt"
-	"time"
 
+	"go.temporal.io/sdk/client"
+
+	"github.com/dimuthu/robot-fleet/internal/billing"
 	"github.com/dimuthu/robot-fleet/internal/store"
 )
 
-// PricingTier defines rate limits and pricing for a subscription tier.
-type PricingTier struct {
-	Name                string  `json:"name"`
-	APICallLimit        int64   `json:"api_call_limit"`         // 0 = unlimited
-	InferenceLimit      int64   `json:"inference_limit"`         // 0 = unlimited
-	RobotsLimit         int     `json:"robots_limit"`            // 0 = unlimited
-	SimHoursPerMonth    float64 `json:"sim_hours_per_month"`     // 0 = unlimited
-	TrainingHoursPerMonth float64 `json:"training_hours_per_month"` // 0 = unlimited
-	MaxAgents           int     `json:"max_agents"`              // 0 = unlimited
-	MonthlyBase         float64 `json:"monthly_base"`
-	PricePerAPICall     float64 `json:"price_per_api_call"`
-	PricePerInference   float64 `json:"price_per_inference"`
-}
+// PricingTier is an alias for the shared billing package type.
+type PricingTier = billing.PricingTier
 
-var pricingTiers = map[string]PricingTier{
-	"free": {
-		Name:                  "free",
-		APICallLimit:          1000,
-		InferenceLimit:        100,
-		RobotsLimit:           5,
-		SimHoursPerMonth:      10,
-		TrainingHoursPerMonth: 2,
-		MaxAgents:             3,
-		MonthlyBase:           0,
-		PricePerAPICall:       0.001,
-		PricePerInference:     0.01,
-	},
-	"pro": {
-		Name:                  "pro",
-		APICallLimit:          100_000,
-		InferenceLimit:        10_000,
-		RobotsLimit:           100,
-		SimHoursPerMonth:      100,
-		TrainingHoursPerMonth: 50,
-		MaxAgents:             50,
-		MonthlyBase:           99.0,
-		PricePerAPICall:       0.0005,
-		PricePerInference:     0.005,
-	},
-	"enterprise": {
-		Name:                  "enterprise",
-		APICallLimit:          0,
-		InferenceLimit:        0,
-		RobotsLimit:           0,
-		SimHoursPerMonth:      0,
-		TrainingHoursPerMonth: 0,
-		MaxAgents:             0,
-		MonthlyBase:           499.0,
-		PricePerAPICall:       0,
-		PricePerInference:     0,
-	},
-}
+// Invoice is an alias for the shared billing package type.
+type Invoice = billing.Invoice
 
-// GetPricingTier returns the pricing tier by name. Falls back to free.
+// GetPricingTier delegates to the billing package.
 func GetPricingTier(name string) PricingTier {
-	if tier, ok := pricingTiers[name]; ok {
-		return tier
-	}
-	return pricingTiers["free"]
+	return billing.GetPricingTier(name)
 }
 
-// Invoice represents a billing invoice for a tenant.
-type Invoice struct {
-	TenantID        string  `json:"tenant_id"`
-	Tier            string  `json:"tier"`
-	Period          string  `json:"period"`
-	APICalls        int64   `json:"api_calls"`
-	InferenceCalls  int64   `json:"inference_calls"`
-	BaseCharge      float64 `json:"base_charge"`
-	APIOverage      float64 `json:"api_overage"`
-	InferenceOverage float64 `json:"inference_overage"`
-	Total           float64 `json:"total"`
-}
-
-// CalculateInvoice computes the bill for a given usage period.
+// CalculateInvoice delegates to the billing package.
 func CalculateInvoice(tier PricingTier, apiCalls, inferenceCalls int64) Invoice {
-	invoice := Invoice{
-		Tier:           tier.Name,
-		APICalls:       apiCalls,
-		InferenceCalls: inferenceCalls,
-		BaseCharge:     tier.MonthlyBase,
-	}
-
-	// API call overage
-	if tier.APICallLimit > 0 && apiCalls > tier.APICallLimit {
-		overage := apiCalls - tier.APICallLimit
-		invoice.APIOverage = float64(overage) * tier.PricePerAPICall
-	}
-
-	// Inference overage
-	if tier.InferenceLimit > 0 && inferenceCalls > tier.InferenceLimit {
-		overage := inferenceCalls - tier.InferenceLimit
-		invoice.InferenceOverage = float64(overage) * tier.PricePerInference
-	}
-
-	invoice.Total = invoice.BaseCharge + invoice.APIOverage + invoice.InferenceOverage
-	return invoice
+	return billing.CalculateInvoice(tier, apiCalls, inferenceCalls)
 }
 
 // BillingService handles billing operations.
 type BillingService interface {
 	GetInvoice(ctx context.Context, tenantID, tier string) (*Invoice, error)
 	ListTiers() []PricingTier
+	GetPersistedInvoice(ctx context.Context, invoiceID string) (*store.InvoiceRecord, error)
+	ListInvoices(ctx context.Context, tenantID string, limit int) ([]*store.InvoiceRecord, error)
+	GetSubscription(ctx context.Context, tenantID string) (*store.TenantRecord, error)
+	ChangeTier(ctx context.Context, tenantID, newTier string) error
+	StartBillingCycle(ctx context.Context, tenantID, tier string) error
+	RetryPayment(ctx context.Context, tenantID string) error
 }
 
-type billingService struct {
-	cache store.CacheStore
-}
-
-// NewBillingService creates a new billing service.
-func NewBillingService(cache store.CacheStore) BillingService {
-	return &billingService{cache: cache}
-}
-
-func (s *billingService) GetInvoice(ctx context.Context, tenantID, tierName string) (*Invoice, error) {
-	tier := GetPricingTier(tierName)
-	date := time.Now().Format("2006-01-02")
-
-	apiCalls, _ := s.cache.GetUsageCounter(ctx, tenantID, "api_calls", date)           // 0 on error — safe default for billing
-	inferenceCalls, _ := s.cache.GetUsageCounter(ctx, tenantID, "inference_calls", date) // 0 on error — safe default for billing
-
-	invoice := CalculateInvoice(tier, apiCalls, inferenceCalls)
-	invoice.TenantID = tenantID
-	invoice.Period = fmt.Sprintf("%s (daily)", date)
-
-	return &invoice, nil
-}
-
-func (s *billingService) ListTiers() []PricingTier {
-	return []PricingTier{
-		pricingTiers["free"],
-		pricingTiers["pro"],
-		pricingTiers["enterprise"],
-	}
+// NewBillingService creates a new billing service backed by Temporal workflows.
+func NewBillingService(billingRepo store.BillingRepository, cache store.CacheStore, tc client.Client) BillingService {
+	return NewTemporalBillingService(billingRepo, cache, tc)
 }

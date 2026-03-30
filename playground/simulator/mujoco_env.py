@@ -56,6 +56,14 @@ class LabSimulation:
                 "actuator_start": i * NUM_ACTUATORS,
                 "battery": 1.0,
                 "status": "active",
+                # Performance metrics (Humanoid-v4 reward decomposition)
+                "prev_x": 0.0,          # previous x position for velocity calc
+                "reward_accum": 0.0,     # accumulated reward this episode
+                "episode_steps": 0,      # steps since last reset
+                "fall_count": 0,         # total falls
+                "episode_count": 0,      # total episodes (resets)
+                "total_reward": 0.0,     # lifetime accumulated reward
+                "total_steps": 0,        # lifetime steps
             })
 
         mujoco.mj_step(self.model, self.data)
@@ -233,13 +241,22 @@ class LabSimulation:
         log.info("Spawned %s (total: %d)", new_robot["id"], self.robot_count)
         return {"robot_id": new_robot["id"], "total_robots": self.robot_count}
 
-    def step(self, actions: dict[str, np.ndarray]):
-        """Advance physics by one timestep.
+    @property
+    def sim_time(self) -> float:
+        """Current simulation time in seconds."""
+        return self.data.time
+
+    def step(self, actions: dict[str, np.ndarray], n_substeps: int = 7):
+        """Advance physics by n_substeps to match real-time at 50 Hz control rate.
+
+        MuJoCo timestep is 0.003s. At 50 Hz control loop (0.02s per tick),
+        we need ~7 sub-steps per control tick to run physics in real-time.
 
         Args:
             actions: dict mapping robot_id -> 17-dim action array
+            n_substeps: number of mj_step calls per control tick (default: 7)
         """
-        # Apply actions to actuators
+        # Apply actions to actuators (held constant across sub-steps)
         for robot in self.robots:
             rid = robot["id"]
             if rid in actions:
@@ -247,14 +264,41 @@ class LabSimulation:
                 start = robot["actuator_start"]
                 self.data.ctrl[start:start + NUM_ACTUATORS] = action
 
-        mujoco.mj_step(self.model, self.data)
+        for _ in range(n_substeps):
+            mujoco.mj_step(self.model, self.data)
         self.steps += 1
 
-        # Check for fallen robots and reset them
+        dt = self.model.opt.timestep * n_substeps
+
+        # Compute reward and check for falls
         for robot in self.robots:
-            qpos_start = robot["qpos_start"]
-            height = self.data.qpos[qpos_start + 2]
+            qs = robot["qpos_start"]
+            vs = robot["qvel_start"]
+            acts = robot["actuator_start"]
+
+            height = self.data.qpos[qs + 2]
+            x_pos = self.data.qpos[qs]
+
+            # Humanoid-v4 reward: forward velocity + alive bonus - control cost
+            forward_velocity = (x_pos - robot["prev_x"]) / dt if dt > 0 else 0.0
+            robot["prev_x"] = x_pos
+
+            ctrl = self.data.ctrl[acts:acts + NUM_ACTUATORS]
+            control_cost = 0.1 * float(np.sum(ctrl ** 2))
+            alive_bonus = 5.0 if height > 0.5 else 0.0
+
+            reward = forward_velocity + alive_bonus - control_cost
+            robot["reward_accum"] += reward
+            robot["episode_steps"] += 1
+            robot["total_steps"] += 1
+
+            # Fall detection and reset
             if height < 0.4:
+                robot["fall_count"] += 1
+                robot["episode_count"] += 1
+                robot["total_reward"] += robot["reward_accum"]
+                robot["reward_accum"] = 0.0
+                robot["episode_steps"] = 0
                 self._reset_robot(robot)
 
             # Battery model
@@ -300,6 +344,11 @@ class LabSimulation:
         pos_x, pos_y, pos_z, qx, qy, qz, qw = extract_root_pose(qpos)
         joints = extract_joint_states(qpos, qvel, forces)
 
+        # Compute instantaneous metrics
+        avg_reward = robot["total_reward"] / max(1, robot["episode_count"])
+        avg_episode_len = robot["total_steps"] / max(1, robot["episode_count"])
+        uptime_pct = 1.0 - (robot["fall_count"] / max(1, robot["total_steps"] / 50))  # falls per ~1s window
+
         return {
             "pos_x": pos_x,
             "pos_y": pos_y,
@@ -313,6 +362,17 @@ class LabSimulation:
             "status": robot["status"],
             "height": pos_z,
             "steps": self.steps,
+            # Performance metrics for platform feedback
+            "metrics": {
+                "reward": round(robot["reward_accum"], 2),
+                "avg_episode_reward": round(avg_reward, 2),
+                "avg_episode_length": round(avg_episode_len, 1),
+                "episode_steps": robot["episode_steps"],
+                "fall_count": robot["fall_count"],
+                "episode_count": robot["episode_count"],
+                "uptime_pct": round(max(0.0, min(1.0, uptime_pct)), 3),
+                "forward_velocity": round((self.data.qpos[robot["qpos_start"]] - robot["prev_x"]), 4),
+            },
         }
 
     def get_all_robot_ids(self) -> list[str]:

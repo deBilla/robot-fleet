@@ -57,6 +57,22 @@ func (r *testRepo) ListCommandAudit(_ context.Context, _, _ string, _ int) ([]*s
 func (r *testRepo) UpdateCommandAuditStatus(_ context.Context, _, _ string) error {
 	return nil
 }
+func (r *testRepo) ListAllActiveRobots(_ context.Context, since time.Time, limit int) ([]*store.RobotRecord, error) {
+	var result []*store.RobotRecord
+	for _, robot := range r.robots {
+		if !robot.LastSeen.Before(since) {
+			result = append(result, robot)
+			if len(result) >= limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+func (r *testRepo) UpdateRobotInferenceModel(_ context.Context, _, _ string) error { return nil }
+func (r *testRepo) ListRobotsByInferenceModel(_ context.Context, _ string) ([]*store.RobotRecord, error) {
+	return nil, nil
+}
 func (r *testRepo) Close() {}
 
 type testCache struct {
@@ -106,9 +122,10 @@ func (c *testCache) Close()                                                     
 func setupTestServer(t *testing.T) (*httptest.Server, *testCache) {
 	t.Helper()
 
+	now := time.Now()
 	repo := &testRepo{robots: []*store.RobotRecord{
-		{ID: "robot-0001", Name: "robot-0001", Model: "humanoid-v1", Status: "active", BatteryLevel: 0.85, TenantID: "tenant-dev"},
-		{ID: "robot-0002", Name: "robot-0002", Model: "humanoid-v1", Status: "charging", BatteryLevel: 0.2, TenantID: "tenant-dev"},
+		{ID: "robot-0001", Name: "robot-0001", Model: "humanoid-v1", Status: "active", BatteryLevel: 0.85, TenantID: "tenant-dev", LastSeen: now},
+		{ID: "robot-0002", Name: "robot-0002", Model: "humanoid-v1", Status: "charging", BatteryLevel: 0.2, TenantID: "tenant-dev", LastSeen: now},
 	}}
 	cache := newTestCache()
 	cache.states["robot-0001"] = &store.RobotHotState{RobotID: "robot-0001", Status: "active", BatteryLevel: 0.85}

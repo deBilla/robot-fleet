@@ -13,7 +13,7 @@
       "type": "stat",
       "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
       "datasource": "Prometheus",
-      "targets": [{ "expr": "fleetos_robots_total", "refId": "A" }],
+      "targets": [{ "expr": "sum(fleetos_robots_total)", "refId": "A" }],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -28,7 +28,7 @@
       "type": "stat",
       "gridPos": { "h": 5, "w": 4, "x": 4, "y": 0 },
       "datasource": "Prometheus",
-      "targets": [{ "expr": "fleetos_robots_active", "refId": "A" }],
+      "targets": [{ "expr": "sum(fleetos_robots_active)", "refId": "A" }],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -43,7 +43,7 @@
       "type": "stat",
       "gridPos": { "h": 5, "w": 4, "x": 8, "y": 0 },
       "datasource": "Prometheus",
-      "targets": [{ "expr": "fleetos_robots_error", "refId": "A" }],
+      "targets": [{ "expr": "sum(fleetos_robots_error)", "refId": "A" }],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -63,7 +63,7 @@
       "type": "gauge",
       "gridPos": { "h": 5, "w": 4, "x": 12, "y": 0 },
       "datasource": "Prometheus",
-      "targets": [{ "expr": "fleetos_avg_battery_level", "refId": "A" }],
+      "targets": [{ "expr": "avg(fleetos_avg_battery_level)", "refId": "A" }],
       "fieldConfig": {
         "defaults": {
           "min": 0,
@@ -86,7 +86,7 @@
       "type": "stat",
       "gridPos": { "h": 5, "w": 4, "x": 16, "y": 0 },
       "datasource": "Prometheus",
-      "targets": [{ "expr": "fleetos_websocket_connections", "refId": "A" }],
+      "targets": [{ "expr": "sum(fleetos_websocket_connections)", "refId": "A" }],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -101,7 +101,7 @@
       "type": "stat",
       "gridPos": { "h": 5, "w": 4, "x": 20, "y": 0 },
       "datasource": "Prometheus",
-      "targets": [{ "expr": "fleetos_api_active_connections", "refId": "A" }],
+      "targets": [{ "expr": "sum(fleetos_api_active_connections)", "refId": "A" }],
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },

@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/sdk/worker"
 
 	"github.com/dimuthu/robot-fleet/internal/config"
+	"github.com/dimuthu/robot-fleet/internal/ingestion"
 	"github.com/dimuthu/robot-fleet/internal/store"
 	temporalpkg "github.com/dimuthu/robot-fleet/internal/temporal"
 	"github.com/dimuthu/robot-fleet/internal/temporal/activities"
@@ -56,16 +57,43 @@ func main() {
 	}
 	defer tc.Close()
 
+	// Kafka producers for command dispatch and deployment events
+	cmdDispatchProducer, err := ingestion.NewKafkaProducer(cfg.KafkaBrokers, cfg.KafkaCommandDispatchTopic)
+	if err != nil {
+		slog.Warn("kafka command dispatch producer not available, falling back to Redis", "error", err)
+	} else {
+		defer cmdDispatchProducer.Close()
+	}
+
+	deployEventProducer, err := ingestion.NewKafkaProducer(cfg.KafkaBrokers, cfg.KafkaDeploymentEventTopic)
+	if err != nil {
+		slog.Warn("kafka deployment event producer not available, falling back to Redis", "error", err)
+	} else {
+		defer deployEventProducer.Close()
+	}
+
+	// Kafka consumer for command acks (replaces Redis ack bridge)
+	ackConsumer := ingestion.NewKafkaConsumer(cfg.KafkaBrokers, cfg.KafkaCommandAcksTopic, "fleetos-ack-bridge")
+	defer ackConsumer.Close()
+
 	// Activity instances with injected dependencies
-	cmdActs := &activities.CommandActivities{Repo: pg, Cache: redis}
-	deployActs := &activities.DeploymentActivities{Models: pg}
-	agentDeployActs := &activities.AgentDeploymentActivities{Agents: pg, Deployments: pg, Cache: redis}
+	cmdActs := &activities.CommandActivities{Repo: pg, Cache: redis, Publisher: cmdDispatchProducer}
+	deployActs := &activities.DeploymentActivities{Models: pg, Robots: pg}
+	agentDeployActs := &activities.AgentDeploymentActivities{Agents: pg, Deployments: pg, Cache: redis, EventProducer: deployEventProducer}
 	webhookActs := activities.NewWebhookActivities()
+	billingActs := &activities.BillingActivities{Billing: pg, Cache: redis}
+
+	// Inference activity
+	inferenceActs := &activities.InferenceActivities{
+		Endpoint: cfg.InferenceEndpoint,
+		Timeout:  cfg.InferenceTimeout,
+	}
 
 	// Command worker
 	cmdWorker := worker.New(tc, temporalpkg.TaskQueueCommand, worker.Options{})
 	cmdWorker.RegisterWorkflow(workflows.CommandDispatchWorkflow)
 	cmdWorker.RegisterActivity(cmdActs)
+	cmdWorker.RegisterActivity(inferenceActs)
 
 	// Deployment worker (model + agent deployment workflows share the same queue)
 	deployWorker := worker.New(tc, temporalpkg.TaskQueueDeployment, worker.Options{})
@@ -80,20 +108,27 @@ func main() {
 	whWorker.RegisterWorkflow(workflows.WebhookDeliverWorkflow)
 	whWorker.RegisterActivity(webhookActs)
 
-	// Start Kafka-Temporal ack bridge (Redis subscriber → Temporal signal)
-	go temporalpkg.AckBridge(ctx, redis.RedisClient(), tc)
+	// Billing worker
+	billingWorker := worker.New(tc, temporalpkg.TaskQueueBilling, worker.Options{})
+	billingWorker.RegisterWorkflow(workflows.BillingCycleWorkflow)
+	billingWorker.RegisterActivity(billingActs)
+
+	// Start Kafka-Temporal ack bridge (Kafka consumer → Temporal signal)
+	go temporalpkg.AckBridgeKafka(ctx, ackConsumer, tc)
 
 	// Start all workers
 	slog.Info("starting temporal workers",
 		"command_queue", temporalpkg.TaskQueueCommand,
 		"deployment_queue", temporalpkg.TaskQueueDeployment,
 		"webhook_queue", temporalpkg.TaskQueueWebhook,
+		"billing_queue", temporalpkg.TaskQueueBilling,
 	)
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
 	go func() { errCh <- cmdWorker.Run(worker.InterruptCh()) }()
 	go func() { errCh <- deployWorker.Run(worker.InterruptCh()) }()
 	go func() { errCh <- whWorker.Run(worker.InterruptCh()) }()
+	go func() { errCh <- billingWorker.Run(worker.InterruptCh()) }()
 
 	// Wait for first error or shutdown
 	select {

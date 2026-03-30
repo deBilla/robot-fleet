@@ -234,8 +234,8 @@ func inferCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("image", "", "base64-encoded image")
-	cmd.Flags().String("model", "groot-n1-v1.5", "model ID")
-	cmd.Flags().String("embodiment", "humanoid-v1", "robot embodiment tag (gr1, unitree-g1, etc.)")
+	cmd.Flags().String("model", "ppo-humanoid-v4", "model ID")
+	cmd.Flags().String("embodiment", "humanoid-v4", "robot embodiment type")
 	return cmd
 }
 

@@ -9,11 +9,17 @@ import (
 	"github.com/dimuthu/robot-fleet/internal/store"
 )
 
+// EventPublisher publishes events to a topic, keyed for partitioning.
+type EventPublisher interface {
+	Publish(key string, data []byte) error
+}
+
 // AgentDeploymentActivities holds dependencies for agent deployment Temporal activities.
 type AgentDeploymentActivities struct {
-	Agents      store.AgentRepository
-	Deployments store.DeploymentRepository
-	Cache       store.CacheStore
+	Agents         store.AgentRepository
+	Deployments    store.DeploymentRepository
+	Cache          store.CacheStore
+	EventProducer  EventPublisher // Kafka producer for deployment events (optional)
 }
 
 // ValidateInput is the input for ValidateAgent.
@@ -200,18 +206,25 @@ func (a *AgentDeploymentActivities) FinalizeAgentDeployment(ctx context.Context,
 	return nil
 }
 
-// emitEvent persists the event to DB and publishes to Redis for SSE streaming.
+// emitEvent persists the event to DB and publishes for SSE streaming.
+// Prefers Kafka if configured, falls back to Redis pub/sub.
 func (a *AgentDeploymentActivities) emitEvent(ctx context.Context, deploymentID, eventType string, data map[string]any) {
 	_ = a.Deployments.AppendDeploymentEvent(ctx, deploymentID, eventType, data)
 
-	// Publish to Redis pub/sub for SSE consumers
+	payload, _ := json.Marshal(map[string]any{
+		"deployment_id": deploymentID,
+		"event_type":    eventType,
+		"data":          data,
+	})
+
+	if a.EventProducer != nil {
+		_ = a.EventProducer.Publish(deploymentID, payload)
+		return
+	}
+
+	// Fallback to Redis pub/sub
 	if a.Cache != nil {
 		channel := fmt.Sprintf("deployment:%s:events", deploymentID)
-		payload, _ := json.Marshal(map[string]any{
-			"deployment_id": deploymentID,
-			"event_type":    eventType,
-			"data":          data,
-		})
 		_ = a.Cache.PublishEvent(ctx, channel, payload)
 	}
 }

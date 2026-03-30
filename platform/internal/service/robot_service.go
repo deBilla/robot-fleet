@@ -11,6 +11,10 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
+// ActiveRobotThreshold is the maximum age of last_seen before a robot is
+// considered stale and excluded from fleet metrics and gauge counts.
+const ActiveRobotThreshold = 5 * time.Minute
+
 // robotService implements RobotService with injected dependencies.
 type robotService struct {
 	repo              store.RobotRepository
@@ -18,31 +22,30 @@ type robotService struct {
 	cmdReg            *command.Registry
 	inferenceEndpoint string
 	inferenceTimeout  time.Duration
-	temporalClient    client.Client // nil when Temporal is disabled
+	temporalClient    client.Client   // nil when Temporal is disabled
+	commandProducer   CommandProducer // nil when Kafka is unavailable
 }
 
 // NewRobotService creates a new RobotService with the given dependencies.
-// temporalClient can be nil to use the legacy Redis pub/sub dispatch path.
 func NewRobotService(
 	repo store.RobotRepository,
 	cache store.CacheStore,
 	cmdReg *command.Registry,
 	inferenceEndpoint string,
 	inferenceTimeout time.Duration,
-	temporalClient ...client.Client,
+	opts ...RobotServiceOption,
 ) RobotService {
-	var tc client.Client
-	if len(temporalClient) > 0 {
-		tc = temporalClient[0]
-	}
-	return &robotService{
+	s := &robotService{
 		repo:              repo,
 		cache:             cache,
 		cmdReg:            cmdReg,
 		inferenceEndpoint: inferenceEndpoint,
 		inferenceTimeout:  inferenceTimeout,
-		temporalClient:    tc,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *robotService) ListRobots(ctx context.Context, tenantID string, limit, offset int) (*ListRobotsResult, error) {
@@ -73,16 +76,55 @@ func (s *robotService) GetTelemetry(ctx context.Context, robotID string) (*Telem
 	return &TelemetryResult{RobotID: robotID, State: state, Timestamp: time.Now().UTC()}, nil
 }
 
+func (s *robotService) RefreshFleetGauges(ctx context.Context) error {
+	const maxGaugeRobots = 10000
+	since := time.Now().Add(-ActiveRobotThreshold)
+	robots, err := s.repo.ListAllActiveRobots(ctx, since, maxGaugeRobots)
+	if err != nil {
+		return fmt.Errorf("refresh fleet gauges: %w", err)
+	}
+
+	var active, errored int
+	var totalBattery float64
+	for _, r := range robots {
+		switch r.Status {
+		case "active":
+			active++
+		case "error":
+			errored++
+		}
+		totalBattery += r.BatteryLevel
+	}
+
+	total := len(robots)
+	avgBattery := 0.0
+	if total > 0 {
+		avgBattery = totalBattery / float64(total)
+	}
+
+	middleware.RobotsTotal.Set(float64(total))
+	middleware.RobotsActive.Set(float64(active))
+	middleware.RobotsError.Set(float64(errored))
+	middleware.AvgBatteryLevel.Set(avgBattery)
+	return nil
+}
+
 func (s *robotService) GetFleetMetrics(ctx context.Context, tenantID string) (*FleetMetrics, error) {
 	const maxFleetRobots = 1000
-	robots, total, err := s.repo.ListRobots(ctx, tenantID, maxFleetRobots, 0)
+	robots, _, err := s.repo.ListRobots(ctx, tenantID, maxFleetRobots, 0)
 	if err != nil {
 		return nil, fmt.Errorf("get fleet metrics: %w", err)
 	}
 
+	since := time.Now().Add(-ActiveRobotThreshold)
 	var active, idle, errored int
 	var totalBattery float64
+	var liveCount int
 	for _, robot := range robots {
+		if robot.LastSeen.Before(since) {
+			continue
+		}
+		liveCount++
 		switch robot.Status {
 		case "active":
 			active++
@@ -95,17 +137,17 @@ func (s *robotService) GetFleetMetrics(ctx context.Context, tenantID string) (*F
 	}
 
 	avgBattery := 0.0
-	if total > 0 {
-		avgBattery = totalBattery / float64(total)
+	if liveCount > 0 {
+		avgBattery = totalBattery / float64(liveCount)
 	}
 
-	middleware.RobotsTotal.Set(float64(total))
+	middleware.RobotsTotal.Set(float64(liveCount))
 	middleware.RobotsActive.Set(float64(active))
 	middleware.RobotsError.Set(float64(errored))
 	middleware.AvgBatteryLevel.Set(avgBattery)
 
 	return &FleetMetrics{
-		TotalRobots:  total,
+		TotalRobots:  liveCount,
 		ActiveRobots: active,
 		IdleRobots:   idle,
 		ErrorRobots:  errored,

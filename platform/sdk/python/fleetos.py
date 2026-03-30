@@ -159,8 +159,8 @@ class FleetOS:
         self,
         instruction: str,
         image: str = "",
-        model_id: str = "groot-n1-v1.5",
-        embodiment: str = "humanoid-v1",
+        model_id: str = "",
+        embodiment: str = "",
     ) -> InferenceResponse:
         data = self._request("POST", "/api/v1/inference", {
             "instruction": instruction, "image": image,

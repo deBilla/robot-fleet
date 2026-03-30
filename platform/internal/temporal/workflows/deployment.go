@@ -67,7 +67,7 @@ func ModelDeploymentWorkflow(ctx workflow.Context, input DeploymentWorkflowInput
 		sel.Select(ctx)
 
 		if manualRollback {
-			_ = workflow.ExecuteActivity(actCtx, "RollbackModel", input.ModelID).Get(ctx, nil)
+			_ = workflow.ExecuteActivity(actCtx, "RollbackModel", activities.RollbackInput{CanaryModelID: input.ModelID, BaselineModelID: baseline.BaselineModelID}).Get(ctx, nil)
 			return &DeploymentWorkflowResult{ModelID: input.ModelID, Phase: "rolled_back", Percent: currentPercent}, nil
 		}
 
@@ -78,7 +78,7 @@ func ModelDeploymentWorkflow(ctx workflow.Context, input DeploymentWorkflowInput
 			BaselineModelID: baseline.BaselineModelID,
 		}).Get(ctx, &metricsOK)
 		if err != nil || !metricsOK {
-			_ = workflow.ExecuteActivity(actCtx, "RollbackModel", input.ModelID).Get(ctx, nil)
+			_ = workflow.ExecuteActivity(actCtx, "RollbackModel", activities.RollbackInput{CanaryModelID: input.ModelID, BaselineModelID: baseline.BaselineModelID}).Get(ctx, nil)
 			return &DeploymentWorkflowResult{ModelID: input.ModelID, Phase: "rolled_back", Percent: currentPercent}, nil
 		}
 

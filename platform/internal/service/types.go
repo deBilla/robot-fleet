@@ -24,6 +24,7 @@ type RobotService interface {
 	RunInference(ctx context.Context, req InferenceRequest, tenantID string) ([]byte, error)
 	SemanticCommand(ctx context.Context, robotID, instruction, tenantID string) (*SemanticCommandResult, error)
 	GetFleetMetrics(ctx context.Context, tenantID string) (*FleetMetrics, error)
+	RefreshFleetGauges(ctx context.Context) error
 	GetUsage(ctx context.Context, tenantID string) (*UsageResult, error)
 	GetCommandHistory(ctx context.Context, robotID, tenantID string, limit int) ([]*store.CommandAuditEntry, error)
 }

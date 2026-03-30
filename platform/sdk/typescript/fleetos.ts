@@ -173,8 +173,8 @@ export class FleetOS {
     return this.request('POST', '/api/v1/inference', {
       instruction,
       image: options?.image || '',
-      model_id: options?.modelId || 'groot-n1-v1.5',
-      embodiment: options?.embodiment || 'humanoid-v1',
+      model_id: options?.modelId || '',
+      embodiment: options?.embodiment || '',
     });
   }
 

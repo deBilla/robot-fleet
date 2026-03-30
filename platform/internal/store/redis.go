@@ -44,13 +44,22 @@ func (s *RedisStore) RedisClient() *redis.Client {
 
 // RobotHotState is the cached current state of a robot.
 type RobotHotState struct {
-	RobotID      string  `json:"robot_id"`
-	Status       string  `json:"status"`
-	PosX         float64 `json:"pos_x"`
-	PosY         float64 `json:"pos_y"`
-	PosZ         float64 `json:"pos_z"`
-	BatteryLevel float64 `json:"battery_level"`
-	LastSeen     int64   `json:"last_seen"`
+	RobotID          string  `json:"robot_id"`
+	Status           string  `json:"status"`
+	PosX             float64 `json:"pos_x"`
+	PosY             float64 `json:"pos_y"`
+	PosZ             float64 `json:"pos_z"`
+	BatteryLevel     float64 `json:"battery_level"`
+	LastSeen         int64   `json:"last_seen"`
+	InferenceModelID string  `json:"inference_model_id,omitempty"`
+
+	// Performance metrics (from simulator reward computation)
+	Reward          float64 `json:"reward,omitempty"`
+	AvgReward       float64 `json:"avg_episode_reward,omitempty"`
+	FallCount       int     `json:"fall_count,omitempty"`
+	EpisodeCount    int     `json:"episode_count,omitempty"`
+	UptimePct       float64 `json:"uptime_pct,omitempty"`
+	ForwardVelocity float64 `json:"forward_velocity,omitempty"`
 
 	// Rich sensor data (for ROS 2 bridge + dashboard)
 	Joints        map[string]float64 `json:"joints,omitempty"`

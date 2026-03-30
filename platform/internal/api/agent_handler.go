@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,15 +13,26 @@ import (
 	"github.com/dimuthu/robot-fleet/internal/store"
 )
 
+// DeploymentEventConsumer reads deployment events from Kafka for SSE streaming.
+type DeploymentEventConsumer interface {
+	Consume(ctx context.Context, handler func(key, value []byte) error) error
+}
+
 // AgentHandler implements thin HTTP adapters for agent lifecycle management.
 type AgentHandler struct {
-	svc   service.AgentService
-	cache store.CacheStore
+	svc            service.AgentService
+	cache          store.CacheStore
+	deployConsumer DeploymentEventConsumer // Kafka consumer for deployment events (optional)
 }
 
 // NewAgentHandler creates a new AgentHandler.
 func NewAgentHandler(svc service.AgentService, cache store.CacheStore) *AgentHandler {
 	return &AgentHandler{svc: svc, cache: cache}
+}
+
+// SetDeploymentEventConsumer configures Kafka-based deployment event streaming.
+func (h *AgentHandler) SetDeploymentEventConsumer(c DeploymentEventConsumer) {
+	h.deployConsumer = c
 }
 
 // RegisterAgent handles POST /api/v1/agents.
@@ -213,9 +225,42 @@ func (h *AgentHandler) StreamDeployment(w http.ResponseWriter, r *http.Request) 
 		deploymentID, deployment.Status)
 	flusher.Flush()
 
-	// Subscribe to Redis pub/sub for deployment events
+	// Stream deployment events — prefer Kafka, fall back to Redis pub/sub
+	if h.deployConsumer != nil {
+		h.streamDeploymentKafka(r.Context(), w, flusher, deploymentID)
+	} else {
+		h.streamDeploymentRedis(r.Context(), w, flusher, deploymentID)
+	}
+}
+
+func (h *AgentHandler) streamDeploymentKafka(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, deploymentID string) {
+	_ = h.deployConsumer.Consume(ctx, func(key, value []byte) error {
+		// Filter: only events for this deployment
+		if string(key) != deploymentID {
+			return nil
+		}
+
+		var event struct {
+			EventType string `json:"event_type"`
+		}
+		eventName := "update"
+		if json.Unmarshal(value, &event) == nil && event.EventType != "" {
+			eventName = event.EventType
+		}
+
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, string(value))
+		flusher.Flush()
+
+		if eventName == "complete" || eventName == "rolled_back" {
+			return fmt.Errorf("terminal event") // break consume loop
+		}
+		return nil
+	})
+}
+
+func (h *AgentHandler) streamDeploymentRedis(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, deploymentID string) {
 	channel := fmt.Sprintf("deployment:%s:events", deploymentID)
-	sub := h.cache.Subscribe(r.Context(), channel)
+	sub := h.cache.Subscribe(ctx, channel)
 	defer sub.Close()
 
 	ch := sub.Channel()
@@ -225,7 +270,6 @@ func (h *AgentHandler) StreamDeployment(w http.ResponseWriter, r *http.Request) 
 			if !ok {
 				return
 			}
-			// Parse to extract event_type for the SSE event field
 			var event struct {
 				EventType string `json:"event_type"`
 			}
@@ -237,12 +281,10 @@ func (h *AgentHandler) StreamDeployment(w http.ResponseWriter, r *http.Request) 
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, msg.Payload)
 			flusher.Flush()
 
-			// Close stream on terminal events
 			if eventName == "complete" || eventName == "rolled_back" {
 				return
 			}
-
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		}
 	}

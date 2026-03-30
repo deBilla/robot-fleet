@@ -44,34 +44,20 @@ func (s *PostgresStore) Pool() *pgxpool.Pool {
 	return s.pool
 }
 
-// Robot represents a robot record in the database.
-type RobotRecord struct {
-	ID           string
-	Name         string
-	Model        string
-	Status       string
-	PosX         float64
-	PosY         float64
-	PosZ         float64
-	BatteryLevel float64
-	LastSeen     time.Time
-	RegisteredAt time.Time
-	TenantID     string
-	Metadata     map[string]string
-}
-
 func (s *PostgresStore) UpsertRobot(ctx context.Context, r *RobotRecord) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO robots (id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO robots (id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id, inference_model_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+			COALESCE(NULLIF($12, ''), (SELECT id FROM model_registry WHERE status = 'deployed' ORDER BY deployed_at DESC NULLS LAST LIMIT 1)))
 		ON CONFLICT (id) DO UPDATE SET
 			status = EXCLUDED.status,
 			pos_x = EXCLUDED.pos_x,
 			pos_y = EXCLUDED.pos_y,
 			pos_z = EXCLUDED.pos_z,
 			battery_level = EXCLUDED.battery_level,
-			last_seen = EXCLUDED.last_seen
-	`, r.ID, r.Name, r.Model, r.Status, r.PosX, r.PosY, r.PosZ, r.BatteryLevel, r.LastSeen, r.RegisteredAt, r.TenantID)
+			last_seen = EXCLUDED.last_seen,
+			inference_model_id = COALESCE(NULLIF(EXCLUDED.inference_model_id, ''), robots.inference_model_id)
+	`, r.ID, r.Name, r.Model, r.Status, r.PosX, r.PosY, r.PosZ, r.BatteryLevel, r.LastSeen, r.RegisteredAt, r.TenantID, r.InferenceModelID)
 	if err != nil {
 		return fmt.Errorf("upsert robot %s: %w", r.ID, err)
 	}
@@ -80,14 +66,48 @@ func (s *PostgresStore) UpsertRobot(ctx context.Context, r *RobotRecord) error {
 
 func (s *PostgresStore) GetRobot(ctx context.Context, id string) (*RobotRecord, error) {
 	r := &RobotRecord{}
+	var inferenceModelID *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id
+		SELECT id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id, inference_model_id
 		FROM robots WHERE id = $1
-	`, id).Scan(&r.ID, &r.Name, &r.Model, &r.Status, &r.PosX, &r.PosY, &r.PosZ, &r.BatteryLevel, &r.LastSeen, &r.RegisteredAt, &r.TenantID)
+	`, id).Scan(&r.ID, &r.Name, &r.Model, &r.Status, &r.PosX, &r.PosY, &r.PosZ, &r.BatteryLevel, &r.LastSeen, &r.RegisteredAt, &r.TenantID, &inferenceModelID)
 	if err != nil {
 		return nil, fmt.Errorf("get robot %s: %w", id, err)
 	}
+	if inferenceModelID != nil {
+		r.InferenceModelID = *inferenceModelID
+	}
 	return r, nil
+}
+
+func (s *PostgresStore) ListAllActiveRobots(ctx context.Context, since time.Time, limit int) ([]*RobotRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id, inference_model_id
+		FROM robots WHERE last_seen >= $1
+		ORDER BY id
+		LIMIT $2
+	`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list all active robots: %w", err)
+	}
+	defer rows.Close()
+
+	var robots []*RobotRecord
+	for rows.Next() {
+		r := &RobotRecord{}
+		var inferenceModelID *string
+		if err := rows.Scan(&r.ID, &r.Name, &r.Model, &r.Status, &r.PosX, &r.PosY, &r.PosZ, &r.BatteryLevel, &r.LastSeen, &r.RegisteredAt, &r.TenantID, &inferenceModelID); err != nil {
+			return nil, fmt.Errorf("scan active robot row: %w", err)
+		}
+		if inferenceModelID != nil {
+			r.InferenceModelID = *inferenceModelID
+		}
+		robots = append(robots, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration for active robots: %w", err)
+	}
+	return robots, nil
 }
 
 func (s *PostgresStore) ListRobots(ctx context.Context, tenantID string, limit, offset int) ([]*RobotRecord, int, error) {
@@ -98,7 +118,7 @@ func (s *PostgresStore) ListRobots(ctx context.Context, tenantID string, limit, 
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id
+		SELECT id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id, inference_model_id
 		FROM robots WHERE tenant_id = $1
 		ORDER BY id
 		LIMIT $2 OFFSET $3
@@ -111,8 +131,12 @@ func (s *PostgresStore) ListRobots(ctx context.Context, tenantID string, limit, 
 	var robots []*RobotRecord
 	for rows.Next() {
 		r := &RobotRecord{}
-		if err := rows.Scan(&r.ID, &r.Name, &r.Model, &r.Status, &r.PosX, &r.PosY, &r.PosZ, &r.BatteryLevel, &r.LastSeen, &r.RegisteredAt, &r.TenantID); err != nil {
+		var inferenceModelID *string
+		if err := rows.Scan(&r.ID, &r.Name, &r.Model, &r.Status, &r.PosX, &r.PosY, &r.PosZ, &r.BatteryLevel, &r.LastSeen, &r.RegisteredAt, &r.TenantID, &inferenceModelID); err != nil {
 			return nil, 0, fmt.Errorf("scan robot row: %w", err)
+		}
+		if inferenceModelID != nil {
+			r.InferenceModelID = *inferenceModelID
 		}
 		robots = append(robots, r)
 	}
@@ -120,6 +144,42 @@ func (s *PostgresStore) ListRobots(ctx context.Context, tenantID string, limit, 
 		return nil, 0, fmt.Errorf("rows iteration for tenant %s: %w", tenantID, err)
 	}
 	return robots, total, nil
+}
+
+// UpdateRobotInferenceModel assigns an inference model to a robot.
+func (s *PostgresStore) UpdateRobotInferenceModel(ctx context.Context, robotID, modelID string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE robots SET inference_model_id = $2 WHERE id = $1`, robotID, modelID)
+	if err != nil {
+		return fmt.Errorf("update inference model for robot %s: %w", robotID, err)
+	}
+	return nil
+}
+
+// ListRobotsByInferenceModel returns all robots assigned to a specific model.
+func (s *PostgresStore) ListRobotsByInferenceModel(ctx context.Context, modelID string) ([]*RobotRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, model, status, pos_x, pos_y, pos_z, battery_level, last_seen, registered_at, tenant_id, inference_model_id
+		FROM robots WHERE inference_model_id = $1
+		ORDER BY id
+	`, modelID)
+	if err != nil {
+		return nil, fmt.Errorf("list robots by inference model %s: %w", modelID, err)
+	}
+	defer rows.Close()
+
+	var robots []*RobotRecord
+	for rows.Next() {
+		r := &RobotRecord{}
+		var inferenceModelID *string
+		if err := rows.Scan(&r.ID, &r.Name, &r.Model, &r.Status, &r.PosX, &r.PosY, &r.PosZ, &r.BatteryLevel, &r.LastSeen, &r.RegisteredAt, &r.TenantID, &inferenceModelID); err != nil {
+			return nil, fmt.Errorf("scan robot: %w", err)
+		}
+		if inferenceModelID != nil {
+			r.InferenceModelID = *inferenceModelID
+		}
+		robots = append(robots, r)
+	}
+	return robots, nil
 }
 
 // StoreTelemetryEvent saves a raw telemetry event for historical queries.
@@ -144,20 +204,6 @@ func (s *PostgresStore) StoreAPIUsage(ctx context.Context, tenantID, endpoint, m
 		return fmt.Errorf("store api usage for %s: %w", tenantID, err)
 	}
 	return nil
-}
-
-// CommandAuditEntry represents a row in the command_audit table.
-type CommandAuditEntry struct {
-	ID             int64
-	CommandID      string
-	RobotID        string
-	TenantID       string
-	CommandType    string
-	Payload        []byte
-	Status         string
-	Instruction    string
-	IdempotencyKey string
-	CreatedAt      time.Time
 }
 
 // InsertCommandAudit appends an immutable audit entry for a command lifecycle event.

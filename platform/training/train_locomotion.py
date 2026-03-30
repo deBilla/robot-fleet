@@ -143,6 +143,7 @@ def train(args):
         "job_id": args.job_id,
         "status": "completed",
         "model_path": model_path + ".zip",
+        "artifact_url": f"training/{args.job_id}/policy.zip",
         "onnx_path": onnx_path,
         "train_duration_seconds": round(train_duration, 1),
         "total_timesteps": args.timesteps,

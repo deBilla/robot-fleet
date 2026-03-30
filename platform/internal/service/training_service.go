@@ -169,7 +169,12 @@ func (s *trainingService) HandleTrainingCallback(ctx context.Context, payload Tr
 		status = TrainingStatusFailed
 	}
 
-	if err := s.repo.UpdateTrainingJobCompleted(ctx, payload.JobID, status, payload.ModelPath, payload.ErrorMessage); err != nil {
+	artifactURL := payload.ArtifactURL
+	if artifactURL == "" {
+		artifactURL = payload.ModelPath // backward compat
+	}
+
+	if err := s.repo.UpdateTrainingJobCompleted(ctx, payload.JobID, status, artifactURL, payload.ErrorMessage); err != nil {
 		return fmt.Errorf("update training job on callback: %w", err)
 	}
 

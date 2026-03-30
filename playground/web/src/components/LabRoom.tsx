@@ -17,10 +17,10 @@ export function LabRoom() {
       {/* Floor - 10x10m */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
         <planeGeometry args={[10, 10]} />
-        <meshStandardMaterial color="#1a1a1e" />
+        <meshStandardMaterial color="#f0f0f0" />
       </mesh>
       {/* Floor grid lines */}
-      <gridHelper args={[10, 20, '#2a2a30', '#222228']} position={[0, 0.001, 0]} />
+      <gridHelper args={[10, 20, '#d0d0d0', '#e0e0e0']} position={[0, 0.001, 0]} />
 
       {/* Walls - 3m tall */}
       <Wall position={m2t(0, 5, 1.5)} size={[10, 3, 0.1]} />
@@ -87,7 +87,7 @@ function Wall({ position, size }: { position: [number, number, number]; size: [n
   return (
     <mesh position={position}>
       <boxGeometry args={size} />
-      <meshStandardMaterial color="#2a2c30" />
+      <meshStandardMaterial color="#e8e8e8" />
     </mesh>
   );
 }

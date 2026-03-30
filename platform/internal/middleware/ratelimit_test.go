@@ -10,6 +10,7 @@ import (
 
 	"github.com/dimuthu/robot-fleet/internal/auth"
 	"github.com/dimuthu/robot-fleet/internal/store"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -128,5 +129,29 @@ func TestUsageMetering_IncrementsCounter(t *testing.T) {
 
 	if mock.counters["tenant-1:api_calls"] != 2 {
 		t.Errorf("expected 2 api_calls, got %d", mock.counters["tenant-1:api_calls"])
+	}
+}
+
+func TestUsageMetering_IncrementsPrometheusCounter(t *testing.T) {
+	// Reset the counter to get a clean baseline.
+	TenantAPIUsage.Reset()
+
+	mock := &mockRedis{counters: make(map[string]int64)}
+	handler := UsageMetering(mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, newAuthenticatedRequest("tenant-a"))
+	handler.ServeHTTP(rr, newAuthenticatedRequest("tenant-a"))
+	handler.ServeHTTP(rr, newAuthenticatedRequest("tenant-b"))
+
+	valA := testutil.ToFloat64(TenantAPIUsage.WithLabelValues("tenant-a"))
+	if valA != 2 {
+		t.Errorf("expected Prometheus counter=2 for tenant-a, got %f", valA)
+	}
+	valB := testutil.ToFloat64(TenantAPIUsage.WithLabelValues("tenant-b"))
+	if valB != 1 {
+		t.Errorf("expected Prometheus counter=1 for tenant-b, got %f", valB)
 	}
 }

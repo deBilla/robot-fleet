@@ -29,26 +29,28 @@ export function SimulationView({ robotStates, connected }: Props) {
   const robots = Array.from(robotStates.entries());
 
   return (
-    <div style={{ height: 420, background: '#0a0a0a', borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
+    <div style={{ height: 420, background: '#ffffff', borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
       <Canvas
         camera={{ position: [0, 6, 8], fov: 60, near: 0.1, far: 100 }}
         shadows
         gl={{ antialias: true }}
       >
-        {/* Lighting matching lab_room.xml */}
-        <ambientLight intensity={0.3} color="#ccccdd" />
+        <color attach="background" args={['#ffffff']} />
+
+        {/* Lighting — bright and clean */}
+        <ambientLight intensity={0.6} color="#ffffff" />
         <directionalLight
           position={[0, 8, 0]}
-          intensity={0.9}
-          color="#e8e8ff"
+          intensity={1.0}
+          color="#ffffff"
           castShadow
           shadow-mapSize={[1024, 1024]}
         />
-        <directionalLight position={[5, 5, -3]} intensity={0.4} color="#aaaacc" />
-        <directionalLight position={[-5, 5, 3]} intensity={0.3} color="#aaaacc" />
+        <directionalLight position={[5, 5, -3]} intensity={0.5} color="#ffffff" />
+        <directionalLight position={[-5, 5, 3]} intensity={0.4} color="#ffffff" />
 
-        {/* Fog for depth */}
-        <fog attach="fog" args={['#0a0a0a', 12, 25]} />
+        {/* Fog for depth — white */}
+        <fog attach="fog" args={['#ffffff', 15, 30]} />
 
         {/* Lab room static geometry */}
         <LabRoom />
@@ -78,7 +80,7 @@ export function SimulationView({ robotStates, connected }: Props) {
         <div style={{
           position: 'absolute', bottom: 10, left: 10,
           padding: '4px 10px', borderRadius: 4,
-          background: 'rgba(0,0,0,0.7)', color: '#f59e0b',
+          background: 'rgba(255,255,255,0.85)', color: '#b45309',
           fontSize: 11, fontFamily: 'var(--font-mono)',
         }}>
           Waiting for telemetry...
@@ -89,7 +91,7 @@ export function SimulationView({ robotStates, connected }: Props) {
       <div style={{
         position: 'absolute', bottom: 10, right: 10,
         padding: '4px 10px', borderRadius: 4,
-        background: 'rgba(0,0,0,0.7)', color: '#94a3b8',
+        background: 'rgba(255,255,255,0.85)', color: '#64748b',
         fontSize: 10, fontFamily: 'var(--font-mono)',
       }}>
         {robots.length} robot{robots.length !== 1 ? 's' : ''} | Three.js + MuJoCo

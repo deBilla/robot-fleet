@@ -60,6 +60,16 @@ message Pose {
   Quaternion orientation = 2;
 }
 
+message PerformanceMetrics {
+  double reward = 1;
+  double avg_episode_reward = 2;
+  double avg_episode_length = 3;
+  int32 fall_count = 4;
+  int32 episode_count = 5;
+  double uptime_pct = 6;
+  double forward_velocity = 7;
+}
+
 message RobotState {
   string robot_id = 1;
   Pose pose = 2;
@@ -67,6 +77,7 @@ message RobotState {
   double battery_level = 4;     // 0.0 - 1.0
   string status = 5;            // "idle", "active", "charging", "error"
   google.protobuf.Timestamp timestamp = 6;
+  PerformanceMetrics metrics = 7;
 }
 
 message TelemetryPacket {
@@ -89,6 +100,7 @@ message RobotCommand {
     JointCommand joint = 5;
     StopCommand stop = 6;
   }
+  string command_type = 7;  // Original command type: "move", "wave", "dance", "stop", etc.
 }
 
 message MoveCommand {

@@ -23,7 +23,7 @@ const ENDPOINTS: Endpoint[] = [
   {
     method: 'POST', path: '/api/v1/inference', description: 'Run AI inference',
     hasBody: true,
-    defaultBody: JSON.stringify({ image: '', instruction: 'walk forward', model_id: 'groot-n1-v1.5' }, null, 2),
+    defaultBody: JSON.stringify({ image: '', instruction: 'walk forward', model_id: 'ppo-humanoid-v4' }, null, 2),
   },
   { method: 'GET', path: '/api/v1/fleet/metrics', description: 'Fleet-wide metrics', hasBody: false },
   { method: 'GET', path: '/api/v1/usage', description: 'API usage for tenant', hasBody: false },

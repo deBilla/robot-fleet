@@ -1,0 +1,30 @@
+# Dependencies
+playground/web/node_modules/
+platform/sdk/python/.pytest_cache/
+
+# Build outputs
+bin/
+playground/web/dist/
+coverage.out
+coverage.html
+*.exe
+
+# Generated protobuf code
+platform/internal/telemetry/*.pb.go
+platform/internal/models/*.pb.go
+
+# Infrastructure state
+platform/deploy/terraform/.terraform/
+platform/deploy/terraform/*.tfstate*
+platform/deploy/terraform/.terraform.lock.hcl
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+__pycache__/
+*.pyc

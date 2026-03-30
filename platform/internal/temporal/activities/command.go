@@ -9,10 +9,16 @@ import (
 	"github.com/dimuthu/robot-fleet/internal/store"
 )
 
+// CommandPublisher publishes commands to the dispatch topic.
+type CommandPublisher interface {
+	Publish(robotID string, data []byte) error
+}
+
 // CommandActivities holds dependencies for command-related Temporal activities.
 type CommandActivities struct {
-	Repo  store.RobotRepository
-	Cache store.CacheStore
+	Repo      store.RobotRepository
+	Cache     store.CacheStore
+	Publisher CommandPublisher // Kafka producer for command dispatch
 }
 
 // WriteAuditInput is the input for WriteCommandAudit activity.
@@ -51,7 +57,7 @@ func (a *CommandActivities) WriteCommandAudit(ctx context.Context, input WriteAu
 	})
 }
 
-// PublishCommand publishes a command to Redis pub/sub, bridging to the gRPC stream.
+// PublishCommand publishes a command to Kafka for delivery to the robot via ingestion.
 func (a *CommandActivities) PublishCommand(ctx context.Context, input PublishCommandInput) error {
 	cmdData, err := json.Marshal(map[string]any{
 		"robot_id":    input.RobotID,
@@ -63,6 +69,10 @@ func (a *CommandActivities) PublishCommand(ctx context.Context, input PublishCom
 	if err != nil {
 		return fmt.Errorf("marshal command: %w", err)
 	}
+	if a.Publisher != nil {
+		return a.Publisher.Publish(input.RobotID, cmdData)
+	}
+	// Fallback to Redis pub/sub if no Kafka producer configured
 	return a.Cache.PublishEvent(ctx, "commands:"+input.RobotID, cmdData)
 }
 

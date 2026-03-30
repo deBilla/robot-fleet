@@ -12,6 +12,9 @@ type RobotRepository interface {
 	UpsertRobot(ctx context.Context, r *RobotRecord) error
 	GetRobot(ctx context.Context, id string) (*RobotRecord, error)
 	ListRobots(ctx context.Context, tenantID string, limit, offset int) ([]*RobotRecord, int, error)
+	ListAllActiveRobots(ctx context.Context, since time.Time, limit int) ([]*RobotRecord, error)
+	UpdateRobotInferenceModel(ctx context.Context, robotID, modelID string) error
+	ListRobotsByInferenceModel(ctx context.Context, modelID string) ([]*RobotRecord, error)
 	StoreTelemetryEvent(ctx context.Context, robotID, eventType string, payload []byte, ts time.Time) error
 	StoreAPIUsage(ctx context.Context, tenantID, endpoint, method string, statusCode int, latencyMs int64) error
 	// Command audit trail (NFR7)
@@ -222,6 +225,29 @@ type SkillsRepository interface {
 	GetSkill(ctx context.Context, id string) (*SkillRecord, error)
 }
 
+// APIKeyRepository defines the contract for API key storage.
+type APIKeyRepository interface {
+	CreateAPIKey(ctx context.Context, k *APIKeyRecord) error
+	GetAPIKey(ctx context.Context, keyHash string) (*APIKeyRecord, error)
+	ListAPIKeys(ctx context.Context, tenantID string) ([]*APIKeyRecord, error)
+	RevokeAPIKey(ctx context.Context, keyHash string) error
+}
+
+// BillingRepository defines the contract for billing storage.
+type BillingRepository interface {
+	UpsertTenant(ctx context.Context, t *TenantRecord) error
+	GetTenant(ctx context.Context, id string) (*TenantRecord, error)
+	ListTenants(ctx context.Context) ([]*TenantRecord, error)
+	UpdateTenantTier(ctx context.Context, id, tier string) error
+	UpsertDailyUsage(ctx context.Context, tenantID string, date time.Time, metric string, count int64) error
+	GetDailyUsage(ctx context.Context, tenantID string, start, end time.Time) ([]*UsageDailyRecord, error)
+	CreateInvoice(ctx context.Context, inv *InvoiceRecord) error
+	GetInvoice(ctx context.Context, id string) (*InvoiceRecord, error)
+	ListInvoices(ctx context.Context, tenantID string, limit int) ([]*InvoiceRecord, error)
+	UpdateInvoiceStatus(ctx context.Context, id, status string) error
+	CreateTierChangeEvent(ctx context.Context, e *TierChangeEventRecord) error
+}
+
 // AuditWriter defines the contract for writing audit log entries.
 type AuditWriter interface {
 	WriteAuditLog(ctx context.Context, tenantID, action, resourceType, resourceID string, details map[string]any) error
@@ -236,6 +262,8 @@ var (
 	_ TrainingRepository   = (*PostgresStore)(nil)
 	_ SafetyRepository     = (*PostgresStore)(nil)
 	_ SkillsRepository     = (*PostgresStore)(nil)
+	_ APIKeyRepository     = (*PostgresStore)(nil)
+	_ BillingRepository    = (*PostgresStore)(nil)
 	_ AuditWriter          = (*PostgresStore)(nil)
 	_ CacheStore           = (*RedisStore)(nil)
 )

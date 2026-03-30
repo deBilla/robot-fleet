@@ -110,6 +110,19 @@ services:
     volumes:
       - minio_data:/data
 
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set fleetos http://minio:9000 fleetos fleetos123 &&
+      mc mb --ignore-existing fleetos/fleetos-models &&
+      mc mb --ignore-existing fleetos/fleetos-telemetry
+      "
+    restart: "no"
+
   # --- Temporal (Control Plane) ---
   temporal:
     image: temporalio/auto-setup:1.25
@@ -152,6 +165,9 @@ services:
       POSTGRES_DSN: postgres://fleetos:fleetos@postgres:5432/fleetos?sslmode=disable
       REDIS_ADDR: redis:6379
       KAFKA_BROKERS: kafka:29092
+      KAFKA_COMMAND_DISPATCH_TOPIC: robot.commands.dispatch
+      KAFKA_COMMAND_ACKS_TOPIC: robot.command-acks
+      KAFKA_DEPLOYMENT_EVENT_TOPIC: deployment.events
     depends_on:
       temporal:
         condition: service_healthy
@@ -168,12 +184,18 @@ services:
       dockerfile: deploy/docker/Dockerfile.ingestion
     ports:
       - "50051:50051"
+      - "9091:9090"
     environment:
       GRPC_PORT: "50051"
       KAFKA_BROKERS: kafka:29092
       KAFKA_TELEMETRY_TOPIC: robot.telemetry
+      KAFKA_COMMAND_DISPATCH_TOPIC: robot.commands.dispatch
+      KAFKA_COMMAND_ACKS_TOPIC: robot.command-acks
+      REDIS_ADDR: redis:6379
     depends_on:
       kafka:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -188,11 +210,15 @@ services:
       POSTGRES_DSN: postgres://fleetos:fleetos@postgres:5432/fleetos?sslmode=disable
       REDIS_ADDR: redis:6379
       KAFKA_BROKERS: kafka:29092
+      KAFKA_COMMAND_TOPIC: robot.commands
+      KAFKA_COMMAND_DISPATCH_TOPIC: robot.commands.dispatch
+      KAFKA_COMMAND_ACKS_TOPIC: robot.command-acks
+      KAFKA_DEPLOYMENT_EVENT_TOPIC: deployment.events
       JWT_SECRET: dev-secret-change-me
       RATE_LIMIT_RPS: "100"
       INFERENCE_ENDPOINT: ${INFERENCE_ENDPOINT:-inference:8081}
       TEMPORAL_HOST_PORT: temporal:7233
-      TEMPORAL_ENABLED: ${TEMPORAL_ENABLED:-false}
+      TEMPORAL_ENABLED: ${TEMPORAL_ENABLED:-true}
       TEMPORAL_NAMESPACE: default
       TRAINING_ENABLED: ${TRAINING_ENABLED:-false}
       TRAINING_IMAGE: fleetos/training:latest
@@ -218,6 +244,7 @@ services:
     environment:
       KAFKA_BROKERS: kafka:29092
       KAFKA_TELEMETRY_TOPIC: robot.telemetry
+      KAFKA_COMMAND_TOPIC: robot.commands
       KAFKA_GROUP_ID: fleetos-processor
       POSTGRES_DSN: postgres://fleetos:fleetos@postgres:5432/fleetos?sslmode=disable
       REDIS_ADDR: redis:6379
@@ -225,6 +252,9 @@ services:
       S3_BUCKET: fleetos-telemetry
       S3_ACCESS_KEY: fleetos
       S3_SECRET_KEY: fleetos123
+      TEMPORAL_ENABLED: "true"
+      TEMPORAL_HOST_PORT: temporal:7233
+      TEMPORAL_NAMESPACE: default
     depends_on:
       kafka:
         condition: service_healthy
@@ -232,6 +262,33 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Inference (AI Model Serving) ---
+  inference:
+    build:
+      context: ../playground
+      dockerfile: deploy/Dockerfile.inference
+    ports:
+      - "8081:8081"
+    environment:
+      INFERENCE_PORT: "8081"
+      PLATFORM_API_URL: "http://api:8080"
+      S3_ENDPOINT: "minio:9000"
+      S3_BUCKET: "fleetos-models"
+      S3_ACCESS_KEY: "fleetos"
+      S3_SECRET_KEY: "fleetos123"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
       minio:
         condition: service_healthy
     restart: unless-stopped

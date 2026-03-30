@@ -1,7 +1,9 @@
 version: "3.9"
 
-# Playground stack: robot simulator + inference + ROS2 bridge
+# Playground stack: robot simulator (like a real robot fleet)
 # Connects to the platform stack via shared Docker network.
+# The robot only sends telemetry (gRPC) and receives commands (gRPC).
+# All reasoning (inference, model management) happens in the platform.
 #
 # Usage:
 #   1. Start platform first:  cd ../platform && docker compose up -d
@@ -20,28 +22,9 @@ services:
     environment:
       ROBOT_ID: "robot-0001"
       GRPC_TARGET: "ingestion:50051"
-      REDIS_ADDR: "redis:6379"
       SIM_STEP_HZ: "50"
       TELEMETRY_HZ: "10"
       FRAME_PORT: "8085"
-    depends_on:
-      - inference
-    networks:
-      - fleetos-net
-    restart: unless-stopped
-
-  inference:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.inference
-    ports:
-      - "8081:8081"
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8081/health\")'"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
     networks:
       - fleetos-net
     restart: unless-stopped

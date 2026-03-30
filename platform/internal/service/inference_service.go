@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/dimuthu/robot-fleet/internal/circuitbreaker"
+	"github.com/dimuthu/robot-fleet/internal/command"
 	"github.com/dimuthu/robot-fleet/internal/middleware"
 )
 
 const (
-	DefaultModelID    = "groot-n1-v1.5"
-	DefaultEmbodiment = "humanoid-v1"
+	DefaultModelID    = "" // empty = inference server uses its active model
+	DefaultEmbodiment = ""
 	DefaultTimeout    = 5 * time.Second
 )
 
@@ -30,11 +31,12 @@ var inferenceBreaker = circuitbreaker.New(circuitbreaker.Config{
 func (s *robotService) RunInference(ctx context.Context, req InferenceRequest, tenantID string) ([]byte, error) {
 	s.cache.IncrementUsageCounter(ctx, tenantID, "inference_calls")
 
-	if req.ModelID == "" {
-		req.ModelID = DefaultModelID
-	}
-	if req.Embodiment == "" {
-		req.Embodiment = DefaultEmbodiment
+	// Look up the robot's assigned inference model if not explicitly provided
+	if req.RobotID != "" && req.ModelID == "" {
+		robot, err := s.repo.GetRobot(ctx, req.RobotID)
+		if err == nil && robot.InferenceModelID != "" {
+			req.ModelID = robot.InferenceModelID
+		}
 	}
 
 	endpoint := s.inferenceEndpoint
@@ -87,48 +89,81 @@ func (s *robotService) RunInference(ctx context.Context, req InferenceRequest, t
 
 	middleware.InferenceDuration.Observe(time.Since(start).Seconds())
 
-	// If a robot_id was provided, forward predicted actions to the simulator via Redis
+	// If a robot_id was provided, forward as a command to the robot.
+	// For known locomotion commands (wave, dance, walk, etc.) send the command
+	// type directly so the robot runs its own time-varying action loop.
+	// For unknown instructions, send apply_actions with the predicted torques.
 	if req.RobotID != "" {
-		go s.forwardInferenceToRobot(context.Background(), req.RobotID, body)
+		go s.forwardInferenceToRobot(context.Background(), req.RobotID, req.Instruction, body)
 	}
 
 	return body, nil
 }
 
-// forwardInferenceToRobot parses inference predicted_actions and publishes
-// them as an apply_actions command to the simulator via Redis.
-func (s *robotService) forwardInferenceToRobot(ctx context.Context, robotID string, inferenceBody []byte) {
-	var result struct {
-		PredictedActions []struct {
-			Joint  string  `json:"joint"`
-			Torque float64 `json:"torque"`
-		} `json:"predicted_actions"`
+// forwardInferenceToRobot sends the inference result to the robot as a command.
+// When a Kafka command producer is available, it publishes a CommandMessage so the
+// processor picks it up and starts a Temporal workflow with full audit trail.
+// Falls back to direct Redis pub/sub when Kafka is unavailable.
+func (s *robotService) forwardInferenceToRobot(ctx context.Context, robotID, instruction string, inferenceBody []byte) {
+	// Resolve command type: known locomotion command or apply_actions with torques
+	cmdType := command.MatchLocomotionCommand(instruction)
+	params := map[string]any{}
+
+	if cmdType == "" {
+		// Unknown instruction: extract predicted torques
+		var result struct {
+			PredictedActions []struct {
+				Joint  string  `json:"joint"`
+				Torque float64 `json:"torque"`
+			} `json:"predicted_actions"`
+		}
+		if err := json.Unmarshal(inferenceBody, &result); err != nil || len(result.PredictedActions) == 0 {
+			return
+		}
+		actions := make([]map[string]any, 0, len(result.PredictedActions))
+		for _, a := range result.PredictedActions {
+			actions = append(actions, map[string]any{"joint": a.Joint, "torque": a.Torque})
+		}
+		cmdType = "apply_actions"
+		params = map[string]any{"actions": actions}
 	}
-	if err := json.Unmarshal(inferenceBody, &result); err != nil || len(result.PredictedActions) == 0 {
+
+	// Kafka path: publish CommandMessage for Temporal workflow orchestration
+	if s.commandProducer != nil {
+		msg := CommandMessage{
+			RobotID:   robotID,
+			CommandID: time.Now().UnixNano(),
+			CmdType:   cmdType,
+			Params:    params,
+			TenantID:  "tenant-dev",
+			DedupKey:  commandDedupKey(robotID, cmdType, params),
+		}
+		data, err := json.Marshal(msg)
+		if err != nil {
+			slog.Error("failed to marshal command message", "error", err)
+			return
+		}
+		if err := s.commandProducer.Publish(robotID, data); err != nil {
+			slog.Error("failed to publish command to kafka", "robot", robotID, "error", err)
+		} else {
+			slog.Info("forwarded inference command via kafka", "robot", robotID, "command", cmdType)
+		}
 		return
 	}
 
-	actions := make([]map[string]any, 0, len(result.PredictedActions))
-	for _, a := range result.PredictedActions {
-		actions = append(actions, map[string]any{"joint": a.Joint, "torque": a.Torque})
-	}
-
+	// Legacy fallback: direct Redis pub/sub
 	cmdData, err := json.Marshal(map[string]any{
 		"robot_id": robotID,
-		"command": map[string]any{
-			"type":   "apply_actions",
-			"params": map[string]any{"actions": actions},
-		},
+		"command":  map[string]any{"type": cmdType, "params": params},
 		"issued_at": time.Now().UTC(),
 	})
 	if err != nil {
-		slog.Error("failed to marshal inference actions", "error", err)
+		slog.Error("failed to marshal command", "error", err)
 		return
 	}
-
 	if err := s.cache.PublishEvent(ctx, "commands:"+robotID, cmdData); err != nil {
-		slog.Error("failed to publish inference actions", "robot", robotID, "error", err)
+		slog.Error("failed to publish command", "robot", robotID, "error", err)
 	} else {
-		slog.Info("forwarded inference actions to robot", "robot", robotID, "joints", len(result.PredictedActions))
+		slog.Info("forwarded inference command via redis", "robot", robotID, "command", cmdType)
 	}
 }

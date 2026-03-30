@@ -28,6 +28,8 @@ export const api = {
     request('POST', '/api/v1/inference', { image, instruction, robot_id: robotId }),
   getFleetMetrics: () => request('GET', '/api/v1/fleet/metrics'),
   getUsage: () => request('GET', '/api/v1/usage'),
+  getCommandHistory: (robotId: string, limit = 10) =>
+    request('GET', `/api/v1/robots/${robotId}/commands?limit=${limit}`),
 };
 
 export type ApiResponse = Awaited<ReturnType<typeof api.healthz>>;

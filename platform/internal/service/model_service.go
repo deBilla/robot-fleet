@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/dimuthu/robot-fleet/internal/store"
@@ -15,6 +17,9 @@ const (
 	ModelStatusDeployed = "deployed"
 	ModelStatusArchived = "archived"
 )
+
+// ModelDeployedChannel is the Redis pub/sub channel for model deployment events.
+const ModelDeployedChannel = "model:deployed"
 
 // ModelRegistryService defines the interface for model lifecycle management.
 type ModelRegistryService interface {
@@ -34,12 +39,13 @@ type RegisterModelRequest struct {
 }
 
 type modelRegistryService struct {
-	repo store.ModelRepository
+	repo  store.ModelRepository
+	cache store.CacheStore
 }
 
 // NewModelRegistryService creates a new model registry service.
-func NewModelRegistryService(repo store.ModelRepository) ModelRegistryService {
-	return &modelRegistryService{repo: repo}
+func NewModelRegistryService(repo store.ModelRepository, cache store.CacheStore) ModelRegistryService {
+	return &modelRegistryService{repo: repo, cache: cache}
 }
 
 func (s *modelRegistryService) RegisterModel(ctx context.Context, req RegisterModelRequest) (*store.ModelRecord, error) {
@@ -68,7 +74,31 @@ func (s *modelRegistryService) ListModels(ctx context.Context, status string) ([
 }
 
 func (s *modelRegistryService) DeployModel(ctx context.Context, id string) error {
-	return s.repo.UpdateModelStatus(ctx, id, ModelStatusDeployed)
+	model, err := s.repo.GetModel(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get model %s: %w", id, err)
+	}
+
+	if err := s.repo.UpdateModelStatus(ctx, id, ModelStatusDeployed); err != nil {
+		return fmt.Errorf("update model status: %w", err)
+	}
+
+	payload, err := json.Marshal(map[string]string{
+		"model_id":    model.ID,
+		"name":        model.Name,
+		"version":     model.Version,
+		"artifact_url": model.ArtifactURL,
+	})
+	if err != nil {
+		slog.Error("failed to marshal model deployed event", "model", id, "error", err)
+		return nil
+	}
+
+	if err := s.cache.PublishEvent(ctx, ModelDeployedChannel, payload); err != nil {
+		slog.Error("failed to publish model deployed event", "model", id, "error", err)
+	}
+
+	return nil
 }
 
 func (s *modelRegistryService) ArchiveModel(ctx context.Context, id string) error {

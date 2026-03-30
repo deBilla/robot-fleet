@@ -51,6 +51,7 @@ func UsageMetering(cache store.CacheStore) func(http.Handler) http.Handler {
 			tenantID := auth.GetTenantID(r.Context())
 			if tenantID != "" {
 				cache.IncrementUsageCounter(r.Context(), tenantID, "api_calls")
+				TenantAPIUsage.WithLabelValues(tenantID).Inc()
 			}
 			next.ServeHTTP(w, r)
 		})
