@@ -83,6 +83,8 @@ AI brain deployed in the platform stack.
 
 - Loads SB3 PPO policy from S3/MinIO
 - `POST /predict`: takes observation vector + instruction, returns 17-dim action vector
+- `POST /resolve`: semantic command resolution via FAISS vector search — takes natural language instruction, searches indexed robot states, maps verbs to command types, returns structured command with spatial context (e.g., target position from matched robots)
+- Background thread polls Redis `robot:state:*` every 5s to keep FAISS index current
 - Maps MuJoCo actuators (17) to Fleet joint schema (20)
 - Called by API service directly or by Worker via Temporal activity
 - Protected by circuit breaker (5 failure threshold, 30s timeout)
@@ -301,7 +303,9 @@ Strategy pattern with keyword matchers in `internal/command/`:
 | "forward", "ahead" | `move_relative` (forward) |
 | "back" | `move_relative` (backward) |
 | "go to", "move to" | `move` |
-| (no match) | `semantic` (sent to inference) |
+| (no match) | Falls back to inference `/resolve` (FAISS vector search) |
+
+When no keyword matches, the Go `SemanticCommand` calls the inference service's `/resolve` endpoint. FAISS searches the indexed robot states for context (e.g., positions of idle robots), maps instruction verbs to a command type, and returns a concrete command with params. If `/resolve` also fails, the raw `"semantic"` type is dispatched.
 
 New commands are added by registering matchers, not editing switch statements.
 

@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -30,6 +31,8 @@ try:
     _REDIS_AVAILABLE = True
 except ImportError:
     _REDIS_AVAILABLE = False
+
+from vector_search import VectorIndex, robot_to_text, text_to_embedding, HAS_FAISS
 
 # ─── Configuration ───────────────────────────────────────────────
 
@@ -125,6 +128,153 @@ _active_model = ActiveModel()
 # Global policy reference — set in main() after loading/training
 _policy = None
 _policy_lock = threading.Lock()
+
+# ─── Vector Search (Semantic Command Resolution) ────────────────
+
+_vector_index = VectorIndex()
+_vector_index_lock = threading.Lock()
+
+# Maps instruction verbs to command types for semantic resolution
+VERB_COMMAND_MAP = [
+    (["go to", "move to", "bring", "navigate", "head to", "approach"], "move"),
+    (["wave", "hello", "greet"], "wave"),
+    (["dance"], "dance"),
+    (["stop", "halt"], "stop"),
+    (["sit", "crouch"], "sit"),
+    (["jump", "hop"], "jump"),
+    (["look", "scan", "find", "search"], "look_around"),
+    (["bow", "respect"], "bow"),
+    (["stretch", "warm up"], "stretch"),
+    (["walk", "move", "go", "forward", "ahead"], "move_relative"),
+]
+
+RESOLVE_CONFIDENCE_THRESHOLD = float(os.environ.get("RESOLVE_CONFIDENCE_THRESHOLD", "0.3"))
+
+
+def _match_verb(instruction: str) -> str:
+    """Match instruction to a command type via verb keywords."""
+    inst = instruction.lower()
+    for verbs, cmd_type in VERB_COMMAND_MAP:
+        for verb in verbs:
+            if verb in inst:
+                return cmd_type
+    return ""
+
+
+def resolve_command(instruction: str, robot_id: str = "") -> dict:
+    """Resolve a natural language instruction to a structured command using vector search.
+
+    Searches the FAISS index for robots matching the instruction context,
+    then maps instruction verbs to a concrete command type with params
+    derived from the search results (e.g., target position from matched robots).
+    """
+    with _vector_index_lock:
+        results = _vector_index.search(instruction, top_k=5)
+
+    cmd_type = _match_verb(instruction)
+    top_score = results[0]["score"] if results else 0.0
+
+    # If we have search results with good confidence, use them for context
+    if results and top_score >= RESOLVE_CONFIDENCE_THRESHOLD:
+        # Extract average position from top matching robots for move commands
+        if cmd_type in ("move", "move_relative", ""):
+            positions = []
+            for r in results[:3]:
+                desc = r.get("description", "")
+                # Parse position from description: "position x=1.2 y=3.4"
+                x_match = re.search(r'x=([-\d.]+)', desc)
+                y_match = re.search(r'y=([-\d.]+)', desc)
+                if x_match and y_match:
+                    positions.append((float(x_match.group(1)), float(y_match.group(1))))
+            if positions:
+                avg_x = sum(p[0] for p in positions) / len(positions)
+                avg_y = sum(p[1] for p in positions) / len(positions)
+                if not cmd_type:
+                    cmd_type = "move"
+                return {
+                    "type": cmd_type,
+                    "params": {
+                        "x": round(avg_x, 2),
+                        "y": round(avg_y, 2),
+                        "instruction": instruction,
+                    },
+                    "confidence": round(top_score, 4),
+                    "context": results[:3],
+                }
+
+    # No spatial context needed — just resolve the verb
+    if cmd_type:
+        return {
+            "type": cmd_type,
+            "params": {"instruction": instruction},
+            "confidence": round(top_score, 4) if results else 0.0,
+            "context": results[:3] if results else [],
+        }
+
+    # No match at all — return empty so caller falls back to apply_actions
+    return {
+        "type": "",
+        "params": {"instruction": instruction},
+        "confidence": 0.0,
+        "context": results[:3] if results else [],
+    }
+
+
+def _poll_robot_states(redis_addr: str) -> None:
+    """Background thread: poll Redis for robot hot state and update FAISS index."""
+    if not _REDIS_AVAILABLE:
+        log.warning("[VectorSearch] redis package not available — index updates disabled")
+        return
+
+    host, _, port_str = redis_addr.rpartition(":")
+    port = int(port_str) if port_str.isdigit() else 6379
+
+    while True:
+        try:
+            client = redis_lib.Redis(host=host or "localhost", port=port, decode_responses=True)
+            log.info("[VectorSearch] Polling robot states from Redis %s every 5s", redis_addr)
+
+            while True:
+                try:
+                    keys = []
+                    cursor = 0
+                    while True:
+                        cursor, batch = client.scan(cursor, match="robot:state:*", count=100)
+                        keys.extend(batch)
+                        if cursor == 0:
+                            break
+
+                    if keys:
+                        pipe = client.pipeline()
+                        for key in keys:
+                            pipe.get(key)
+                        values = pipe.execute()
+
+                        robots = []
+                        for key, val in zip(keys, values):
+                            if val:
+                                try:
+                                    state = json.loads(val)
+                                    robot_id = key.split(":", 2)[-1] if ":" in key else key
+                                    state["robot_id"] = robot_id
+                                    robots.append(state)
+                                except (json.JSONDecodeError, KeyError):
+                                    pass
+
+                        if robots:
+                            new_index = VectorIndex()
+                            new_index.index_robots(robots)
+                            with _vector_index_lock:
+                                global _vector_index
+                                _vector_index = new_index
+                            log.debug("[VectorSearch] Indexed %d robots", len(robots))
+                except Exception as exc:
+                    log.warning("[VectorSearch] Poll error: %s", exc)
+
+                time.sleep(5)
+        except Exception as exc:
+            log.error("[VectorSearch] Redis connection failed: %s — retrying in 5s", exc)
+            time.sleep(5)
 
 
 def _poll_platform_model(platform_api_url: str) -> str:
@@ -472,6 +622,28 @@ class InferenceHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
+
+        elif self.path == "/resolve":
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(content_len)) if content_len else {}
+
+            instruction = body.get("instruction", "")
+            robot_id = body.get("robot_id", "")
+
+            if not instruction:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "instruction required"}).encode())
+                return
+
+            result = resolve_command(instruction, robot_id)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+
         else:
             self.send_error(404)
 
@@ -483,7 +655,15 @@ class InferenceHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"status": status, "model": model_id, "ready": ready}).encode())
+            self.wfile.write(json.dumps({
+                "status": status,
+                "model": model_id,
+                "ready": ready,
+                "vector_index": {
+                    "indexed": len(_vector_index.docs),
+                    "backend": "faiss" if HAS_FAISS else "numpy",
+                },
+            }).encode())
         elif self.path == "/model":
             model_id, version = _active_model.snapshot()
             self.send_response(200)
@@ -534,8 +714,9 @@ def main():
     redis_addr = os.environ.get("REDIS_ADDR", "")
     if redis_addr:
         threading.Thread(target=_subscribe_model_updates, args=(redis_addr,), daemon=True).start()
+        threading.Thread(target=_poll_robot_states, args=(redis_addr,), daemon=True).start()
     else:
-        log.info("[Model] REDIS_ADDR not set — model hot-swap disabled")
+        log.info("[Model] REDIS_ADDR not set — model hot-swap and vector search disabled")
 
     server.serve_forever()
 

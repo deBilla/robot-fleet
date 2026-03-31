@@ -9,7 +9,7 @@ A distributed robot fleet management platform following the **Menlo OS architect
 - **Multi-tenant Auth & Billing** -- JWT + OAuth2/OIDC + API key authentication, RBAC (4 roles), per-tenant rate limiting, usage metering, 3-tier pricing (free/pro/enterprise)
 - **AI Inference** -- SB3 PPO policy serving with instruction bias, loads models from S3/MinIO, hot-swaps on deployment
 - **Durable Command Pipeline** -- Commands published to Kafka (`robot.commands`), consumed by processor, orchestrated via Temporal workflows with audit trail, ack tracking, retries, and timeout handling
-- **Semantic Commands** -- Natural language robot control via extensible command registry (strategy pattern)
+- **Semantic Commands** -- Natural language robot control via extensible command registry (strategy pattern), with FAISS-backed resolution for unmatched instructions (searches fleet state to resolve spatial commands like "go where the idle robots are")
 - **Model Registry** -- Model lifecycle management (staged -> canary -> deployed -> archived) with S3 artifact storage, canary deployment via Temporal workflows
 - **Admin Console** -- React SPA at `/admin/` for tenant management, DB-backed API key lifecycle (create/revoke with SHA-256 hashing), billing overview
 - **Temporal Billing** -- Per-tenant BillingCycleWorkflow: 6h usage aggregation (Redis → Postgres), monthly invoice generation, payment processing with dunning retries, tier change signals
@@ -18,7 +18,7 @@ A distributed robot fleet management platform following the **Menlo OS architect
 - **Performance Metrics Feedback** -- Simulator computes Humanoid-v4 reward (forward velocity + alive bonus - control cost), tracks falls/uptime, streams metrics via protobuf → processor aggregates into model registry `success_rate`
 - **Kafka Event Pipeline** -- Commands, acks, and deployment events all flow through Kafka topics (no Redis pub/sub for events); Redis is cache + rate limiter only
 - **Temporal Workflow Orchestration** -- Command dispatch, model deployment, agent deployment, billing cycles, and webhook delivery all run as durable Temporal workflows with full visibility via Temporal UI
-- **FAISS Vector Search** -- Semantic search over robot fleet state ("find robots with low battery near warehouse")
+- **FAISS Vector Search** -- Semantic search over robot fleet state via `/resolve` endpoint, indexes robots from Redis hot state every 5s, resolves natural language instructions to concrete commands with spatial context
 - **Analytics Pipeline** -- S3 (raw NDJSON) -> Spark (batch) -> ClickHouse (OLAP) -> Redis (cache) -> API
 - **ROS 2 Integration** -- Bridge node publishing to standard ROS 2 topics (JointState, PoseStamped, BatteryState, LaserScan)
 - **Cloud-native Infrastructure** -- Kubernetes, Helm, Terraform (AWS), Docker Compose, Istio service mesh (mTLS)

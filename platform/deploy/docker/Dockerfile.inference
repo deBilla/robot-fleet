@@ -15,6 +15,7 @@ COPY inference/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY inference/server.py .
+COPY inference/vector_search.py .
 
 # Model cache persists across container restarts
 VOLUME /tmp/fleetos-models

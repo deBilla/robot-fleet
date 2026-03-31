@@ -1,16 +1,19 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
 	"go.temporal.io/sdk/client"
 
+	"github.com/dimuthu/robot-fleet/internal/command"
 	"github.com/dimuthu/robot-fleet/internal/middleware"
 	"github.com/dimuthu/robot-fleet/internal/store"
 	temporalpkg "github.com/dimuthu/robot-fleet/internal/temporal"
@@ -144,10 +147,62 @@ func (s *robotService) sendCommandLegacy(ctx context.Context, robotID, cmdType s
 	return &CommandResult{CommandID: commandID, Status: "queued", RobotID: robotID}, nil
 }
 
+// resolveViaInference calls the inference service /resolve endpoint to resolve
+// a semantic instruction into a concrete command using FAISS vector search.
+func (s *robotService) resolveViaInference(ctx context.Context, robotID, instruction string) (*command.Result, error) {
+	endpoint := s.inferenceEndpoint
+	if endpoint == "" {
+		endpoint = "localhost:8081"
+	}
+	resolveURL := fmt.Sprintf("http://%s/resolve", endpoint)
+
+	reqBody, err := json.Marshal(map[string]string{
+		"instruction": instruction,
+		"robot_id":    robotID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal resolve request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post(resolveURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("inference resolve unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("inference resolve returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Type   string         `json:"type"`
+		Params map[string]any `json:"params"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode resolve response: %w", err)
+	}
+	if result.Type == "" {
+		return nil, fmt.Errorf("inference could not resolve instruction")
+	}
+
+	return &command.Result{Type: result.Type, Params: result.Params}, nil
+}
+
 func (s *robotService) SemanticCommand(ctx context.Context, robotID, instruction, tenantID string) (*SemanticCommandResult, error) {
 	s.cache.IncrementUsageCounter(ctx, tenantID, "semantic_commands")
 
 	resolved := s.cmdReg.Resolve(instruction)
+
+	// If no keyword matched, try FAISS-based resolution via inference service
+	if resolved.Type == "semantic" {
+		if resolvedFromInference, err := s.resolveViaInference(ctx, robotID, instruction); err == nil {
+			resolved = *resolvedFromInference
+			slog.Info("semantic command resolved via inference", "robot", robotID, "instruction", instruction, "resolved_type", resolved.Type)
+		} else {
+			slog.Warn("inference resolve failed, using raw semantic", "error", err, "instruction", instruction)
+		}
+	}
 
 	// Idempotency check for semantic commands
 	dedupKey := commandDedupKey(robotID, resolved.Type, resolved.Params)
