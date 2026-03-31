@@ -1,0 +1,213 @@
+{
+  "uid": "fleetos-platform-ops",
+  "title": "FleetOS - Platform Operations",
+  "tags": ["fleetos", "operations", "grpc", "temporal", "ml"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "title": "gRPC Active Streams",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum(fleetos_grpc_active_streams)", "legendFormat": "Total", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{"color":"red","value":0},{"color":"green","value":1}] } } }
+    },
+    {
+      "id": 2, "title": "Telemetry Streams",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [{ "expr": "fleetos_grpc_active_streams{stream_type=\"telemetry\"}", "legendFormat": "Telemetry", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } }
+    },
+    {
+      "id": 3, "title": "Command Streams",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [{ "expr": "fleetos_grpc_active_streams{stream_type=\"commands\"}", "legendFormat": "Commands", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" } } }
+    },
+    {
+      "id": 4, "title": "WebSocket Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "targets": [{ "expr": "fleetos_websocket_connections", "legendFormat": "WS", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" } } }
+    },
+    {
+      "id": 5, "title": "Active Robots",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [{ "expr": "fleetos_robots_active", "legendFormat": "Active", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } }
+    },
+    {
+      "id": 6, "title": "Model Success Rate",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "targets": [{ "expr": "fleetos_model_success_rate", "legendFormat": "{{model_id}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "thresholds": { "steps": [{"color":"red","value":0},{"color":"yellow","value":0.5},{"color":"green","value":0.8}] } } }
+    },
+    {
+      "id": 7, "title": "gRPC Stream Messages (rate/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "rate(fleetos_grpc_stream_messages_total{direction=\"received\"}[1m])", "legendFormat": "{{stream_type}} received", "refId": "A" },
+        { "expr": "rate(fleetos_grpc_stream_messages_total{direction=\"sent\"}[1m])", "legendFormat": "{{stream_type}} sent", "refId": "B" }
+      ],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 8, "title": "gRPC Stream Duration",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(fleetos_grpc_stream_duration_seconds_bucket[5m]))", "legendFormat": "p50 {{stream_type}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(fleetos_grpc_stream_duration_seconds_bucket[5m]))", "legendFormat": "p95 {{stream_type}}", "refId": "B" }
+      ],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 9, "title": "Telemetry Ingestion Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "targets": [{ "expr": "rate(fleetos_telemetry_packets_total[1m])", "legendFormat": "packets/s", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 10, "title": "Commands Dispatched",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "targets": [{ "expr": "rate(fleetos_commands_dispatched_total[5m])", "legendFormat": "{{command_type}} ({{status}})", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 11, "title": "API Request Rate by Status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "targets": [{ "expr": "sum(rate(fleetos_api_requests_total[1m])) by (status)", "legendFormat": "{{status}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 12, "title": "Per-Robot Battery Levels",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [{ "expr": "fleetos_robot_battery_level", "legendFormat": "{{robot_id}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "unit": "percentunit" } }
+    },
+    {
+      "id": 13, "title": "Per-Robot Reward",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [{ "expr": "fleetos_robot_reward", "legendFormat": "{{robot_id}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 14, "title": "Per-Robot Uptime %",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [{ "expr": "fleetos_robot_uptime_pct", "legendFormat": "{{robot_id}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "unit": "percentunit" } }
+    },
+    {
+      "id": 15, "title": "Per-Robot Falls",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [{ "expr": "fleetos_robot_fall_count", "legendFormat": "{{robot_id}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 16, "title": "Model Success Rate Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "targets": [{ "expr": "fleetos_model_success_rate", "legendFormat": "{{model_id}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "unit": "percentunit" } }
+    },
+    {
+      "id": 17, "title": "Model Deployments",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 36 },
+      "targets": [{ "expr": "rate(fleetos_model_deployments_total[1h])", "legendFormat": "{{outcome}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 18, "title": "Training Jobs",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 36 },
+      "targets": [{ "expr": "rate(fleetos_training_jobs_total[1h])", "legendFormat": "{{status}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 19, "title": "API Latency (p50, p95, p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 44 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(fleetos_api_request_duration_seconds_bucket[5m]))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(fleetos_api_request_duration_seconds_bucket[5m]))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, rate(fleetos_api_request_duration_seconds_bucket[5m]))", "legendFormat": "p99", "refId": "C" }
+      ],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 20, "title": "Inference Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 44 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(fleetos_inference_duration_seconds_bucket[5m]))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(fleetos_inference_duration_seconds_bucket[5m]))", "legendFormat": "p95", "refId": "B" }
+      ],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 21, "title": "Per-Tenant API Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 44 },
+      "targets": [{ "expr": "rate(fleetos_tenant_api_calls_total[5m])", "legendFormat": "{{tenant_id}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 22, "title": "Billing Invoices",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 52 },
+      "targets": [{ "expr": "sum(fleetos_billing_invoices_generated_total) by (status)", "legendFormat": "{{status}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 23, "title": "Payment Attempts",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 52 },
+      "targets": [{ "expr": "sum(fleetos_billing_payment_attempts_total) by (outcome)", "legendFormat": "{{outcome}}", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+    },
+    {
+      "id": 24, "title": "Experience Transitions",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 52 },
+      "targets": [{ "expr": "fleetos_experience_transitions_total", "legendFormat": "Total", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } }
+    },
+    {
+      "id": 25, "title": "Experience Batches",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 52 },
+      "targets": [{ "expr": "fleetos_experience_batches_written_total", "legendFormat": "Batches", "refId": "A" }],
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" } } }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

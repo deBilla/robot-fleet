@@ -15,9 +15,24 @@ scrape_configs:
     static_configs:
       - targets: ["ingestion:9090"]
 
+  - job_name: "fleetos-processor"
+    static_configs:
+      - targets: ["processor:9090"]
+    metrics_path: /metrics
+
+  - job_name: "fleetos-worker"
+    static_configs:
+      - targets: ["worker:9090"]
+    metrics_path: /metrics
+
   - job_name: "fleetos-inference"
     static_configs:
       - targets: ["inference:8081"]
+    metrics_path: /metrics
+
+  - job_name: "temporal"
+    static_configs:
+      - targets: ["temporal:8000"]
     metrics_path: /metrics
 
   - job_name: "clickhouse"

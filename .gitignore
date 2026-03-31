@@ -1,7 +1,7 @@
 # Go build artifacts
 bin/
-processor
-ingestion
+/processor
+/ingestion
 coverage.out
 coverage.html
 *.exe

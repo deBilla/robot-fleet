@@ -40,6 +40,12 @@ func (h *TelemetryHandler) SetCommandPipeline(dispatcher *CommandDispatcher, ack
 // StreamTelemetry receives a bidirectional stream of telemetry from robots.
 func (h *TelemetryHandler) StreamTelemetry(stream pb.TelemetryService_StreamTelemetryServer) error {
 	slog.Info("new telemetry stream connected")
+	middleware.GRPCActiveStreams.WithLabelValues("telemetry").Inc()
+	streamStart := time.Now()
+	defer func() {
+		middleware.GRPCActiveStreams.WithLabelValues("telemetry").Dec()
+		middleware.GRPCStreamDuration.WithLabelValues("telemetry").Observe(time.Since(streamStart).Seconds())
+	}()
 
 	for {
 		packet, err := stream.Recv()
@@ -54,6 +60,7 @@ func (h *TelemetryHandler) StreamTelemetry(stream pb.TelemetryService_StreamTele
 
 		count := h.packetCount.Add(1)
 		middleware.TelemetryPacketsTotal.Inc()
+		middleware.GRPCStreamMessagesTotal.WithLabelValues("telemetry", "received").Inc()
 		if count%1000 == 0 {
 			slog.Info("telemetry packets received", "total", count, "robot", packet.RobotId)
 		}
@@ -106,6 +113,12 @@ func (h *TelemetryHandler) StreamCommands(req *pb.CommandRequest, stream pb.Tele
 
 func (h *TelemetryHandler) streamCommandsKafka(robotID string, ctx context.Context, stream pb.TelemetryService_StreamCommandsServer) error {
 	slog.Info("command stream opened (kafka)", "robot", robotID)
+	middleware.GRPCActiveStreams.WithLabelValues("commands").Inc()
+	streamStart := time.Now()
+	defer func() {
+		middleware.GRPCActiveStreams.WithLabelValues("commands").Dec()
+		middleware.GRPCStreamDuration.WithLabelValues("commands").Observe(time.Since(streamStart).Seconds())
+	}()
 
 	cmdCh := h.cmdDispatcher.Subscribe(robotID)
 	defer h.cmdDispatcher.Unsubscribe(robotID)

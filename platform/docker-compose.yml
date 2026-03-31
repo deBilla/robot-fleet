@@ -241,6 +241,8 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile.processor
+    ports:
+      - "9093:9090"
     environment:
       KAFKA_BROKERS: kafka:29092
       KAFKA_TELEMETRY_TOPIC: robot.telemetry
