@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # --- Infrastructure ---
   postgres:
@@ -90,6 +88,8 @@ services:
     depends_on:
       - prometheus
       - clickhouse
+    profiles:
+      - observability
 
   # --- MinIO (S3-compatible object storage) ---
   minio:
@@ -141,7 +141,7 @@ services:
       test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233"]
       interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 10
       start_period: 30s
 
   temporal-ui:
@@ -153,6 +153,8 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
+    profiles:
+      - dev-tools
 
   worker:
     build:
@@ -266,15 +268,13 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      temporal:
-        condition: service_healthy
     restart: unless-stopped
 
   # --- Inference (AI Model Serving) ---
   inference:
     build:
-      context: ../playground
-      dockerfile: deploy/Dockerfile.inference
+      context: .
+      dockerfile: deploy/docker/Dockerfile.inference
     ports:
       - "8081:8081"
     environment:
@@ -310,6 +310,8 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./analytics/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql
     restart: unless-stopped
+    profiles:
+      - observability
 
   # --- Apache Spark (Analytics) ---
   spark-master:
@@ -321,6 +323,8 @@ services:
     volumes:
       - ./analytics:/opt/spark-jobs
     restart: unless-stopped
+    profiles:
+      - analytics
 
   spark-worker:
     image: apache/spark:3.5.4-python3
@@ -331,6 +335,8 @@ services:
     depends_on:
       - spark-master
     restart: unless-stopped
+    profiles:
+      - analytics
 
   # --- Training image (pre-built for local K8s jobs) ---
   training-build:

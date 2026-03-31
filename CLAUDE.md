@@ -40,7 +40,7 @@ Six services:
 - **ingestion** (`platform/cmd/ingestion/`) — gRPC server → Kafka producer, bridges Redis commands → gRPC StreamCommands
 - **api** (`platform/cmd/api/`) — REST API + WebSocket + auth + rate limiting + billing
 - **processor** (`platform/cmd/processor/`) — Kafka consumer → Postgres/Redis/S3
-- **inference** (`playground/inference/`, deployed in platform stack) — SB3 PPO policy serving, loads models from S3
+- **inference** (`platform/inference/`) — SB3 PPO policy serving, loads models from S3
 - **training** (`platform/training/`) — Manual training pipelines, uploads to S3
 
 ## Quick Commands
@@ -104,7 +104,7 @@ cd platform && make helm-install
 | `platform/analytics/` | Spark analytics pipeline |
 | `platform/docs/` | OpenAPI spec, architecture diagrams |
 | `playground/simulator/` | MuJoCo robot simulator (Python) — physics + telemetry + command execution |
-| `playground/inference/` | SB3 PPO inference service (Python) — deployed in platform stack |
+| `platform/inference/` | SB3 PPO inference service (Python) |
 | `playground/web/` | React frontend for robot dashboard |
 | `playground/proto/` | Protobuf definitions (playground copy, stubs generated at Docker build) |
 

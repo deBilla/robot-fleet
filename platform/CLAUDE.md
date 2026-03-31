@@ -21,7 +21,7 @@ Five services (platform only — simulator lives in `playground/`):
 - **api** (`cmd/api/`) — REST API + WebSocket + auth + rate limiting + billing
 - **processor** (`cmd/processor/`) — Kafka consumer → Postgres/Redis/S3
 - **worker** (`cmd/worker/`) — Temporal worker (command, deployment, billing workflows)
-- **inference** (`../playground/inference/`, deployed in platform stack) — SB3 PPO policy serving, loads models from S3
+- **inference** (`inference/`, deployed in platform stack) — SB3 PPO policy serving, loads models from S3
 
 ## Quick Commands
 
@@ -74,7 +74,7 @@ make helm-install
 | `migrations/` | PostgreSQL DDL migrations |
 | `deploy/` | Docker, Helm, Terraform, Kubernetes configs |
 | `observability/` | Prometheus, Grafana, alerting configs |
-| `../playground/inference/` | SB3 PPO inference service (deployed in platform stack) |
+| `inference/` | SB3 PPO inference service (deployed in platform stack) |
 | `sdk/python/` | Python SDK (zero-dependency, typed) |
 | `sdk/typescript/` | TypeScript SDK (typed interfaces) |
 | `training/` | Model training pipelines |

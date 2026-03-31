@@ -77,7 +77,7 @@ Temporal worker that executes all durable workflows across 5 task queues:
 | `fleetos-webhooks` | `WebhookFanoutWorkflow`, `WebhookDeliverWorkflow` | Fan out events to registered URLs with HMAC signatures and retries |
 | `fleetos-training` | `TrainingPipelineWorkflow` | Submit K8s training job, poll status, evaluate, auto-deploy model if passing |
 
-### 5. Inference Service (`playground/inference/`)
+### 5. Inference Service (`platform/inference/`)
 
 AI brain deployed in the platform stack.
 

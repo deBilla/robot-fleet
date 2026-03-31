@@ -382,7 +382,7 @@ platform/
 |   |   +-- workflows/          # Command, deployment, billing, training pipeline, webhook
 |   |   +-- activities/         # Command, deployment, billing, training, inference, webhook
 |   +-- config/                 # Environment-based configuration
-+-- ../playground/inference/     # Python inference service (deployed in platform stack)
++-- inference/                   # Python inference service (SB3 PPO policy serving)
 |   +-- server.py               # SB3 PPO policy serving + instruction bias
 +-- analytics/                  # Spark analytics
 |   +-- telemetry_analytics.py  # PySpark batch job (S3 -> ClickHouse)

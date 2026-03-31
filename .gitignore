@@ -2,6 +2,8 @@
 bin/
 /processor
 /ingestion
+platform/processor
+platform/ingestion
 coverage.out
 coverage.html
 *.exe
