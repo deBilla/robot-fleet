@@ -108,6 +108,25 @@ module "eks" {
       }]
     }
 
+    # GPU nodes for ML training (Kubeflow PyTorchJob / Katib)
+    training = {
+      instance_types = ["g5.2xlarge"]
+      min_size       = 0
+      max_size       = 8
+      desired_size   = 0  # scale from zero — Kubeflow provisions on demand
+      ami_type       = "AL2_x86_64_GPU"
+
+      labels = {
+        workload = "training"
+      }
+
+      taints = [{
+        key    = "nvidia.com/gpu"
+        value  = "true"
+        effect = "NO_SCHEDULE"
+      }]
+    }
+
     # High-memory nodes for Kafka
     kafka = {
       instance_types = ["r6i.xlarge"]
@@ -308,6 +327,90 @@ resource "aws_s3_bucket_lifecycle_configuration" "telemetry" {
   }
 }
 
+# --- Kubeflow (MLOps) ---
+
+# Kubeflow namespace
+resource "kubernetes_namespace" "kubeflow" {
+  metadata {
+    name = "kubeflow"
+    labels = {
+      "istio-injection" = "enabled"
+    }
+  }
+
+  depends_on = [module.eks]
+}
+
+# IAM role for Kubeflow training jobs (S3 access for models + experience data)
+resource "aws_iam_role" "kubeflow_training" {
+  name = "${var.cluster_name}-kubeflow-training"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Effect = "Allow"
+      Principal = {
+        Federated = module.eks.oidc_provider_arn
+      }
+      Condition = {
+        StringLike = {
+          "${module.eks.oidc_provider}:sub" = "system:serviceaccount:kubeflow:*"
+        }
+      }
+    }]
+  })
+
+  tags = {
+    Environment = var.environment
+    Project     = "fleetos"
+  }
+}
+
+resource "aws_iam_role_policy" "kubeflow_s3" {
+  name = "${var.cluster_name}-kubeflow-s3"
+  role = aws_iam_role.kubeflow_training.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"]
+        Resource = [
+          aws_s3_bucket.models.arn,
+          "${aws_s3_bucket.models.arn}/*",
+          aws_s3_bucket.training_data.arn,
+          "${aws_s3_bucket.training_data.arn}/*",
+        ]
+      },
+    ]
+  })
+}
+
+# S3 lifecycle for experience data (archive after 30 days, delete after 180)
+resource "aws_s3_bucket_lifecycle_configuration" "training_data" {
+  bucket = aws_s3_bucket.training_data.id
+
+  rule {
+    id     = "archive-old-experience"
+    status = "Enabled"
+
+    filter {
+      prefix = "experience/"
+    }
+
+    transition {
+      days          = 30
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = 180
+    }
+  }
+}
+
 # --- Outputs ---
 output "cluster_endpoint" {
   value = module.eks.cluster_endpoint
@@ -323,4 +426,8 @@ output "rds_endpoint" {
 
 output "redis_endpoint" {
   value = aws_elasticache_replication_group.redis.primary_endpoint_address
+}
+
+output "kubeflow_training_role_arn" {
+  value = aws_iam_role.kubeflow_training.arn
 }

@@ -41,9 +41,17 @@ def main():
     from mujoco_env import LabSimulation
     from command_handler import CommandHandler
     from telemetry_client import TelemetryClient
+    from experience_writer import ExperienceWriter
     from frame_server import start_server, set_spawn_callback, set_list_robots_callback
 
     sim = LabSimulation()
+
+    # Experience writer — collects (obs, action, reward, done) for offline RL
+    s3_endpoint = os.environ.get("S3_ENDPOINT", "")
+    s3_bucket = os.environ.get("S3_BUCKET", "fleetos-models")
+    s3_access_key = os.environ.get("S3_ACCESS_KEY", "fleetos")
+    s3_secret_key = os.environ.get("S3_SECRET_KEY", "fleetos123")
+    experience = ExperienceWriter(s3_endpoint, s3_bucket, s3_access_key, s3_secret_key)
     spawn_queue: queue.Queue[str] = queue.Queue()
     spawn_results: dict[str, dict] = {}
 
@@ -130,6 +138,28 @@ def main():
             sim.step(actions)
             step += 1
 
+            # Record experience for offline RL training
+            if step % 5 == 0:  # every 5th step to reduce volume
+                for rid in robot_ids:
+                    robot = sim._find_robot(rid)
+                    if robot and rid in actions:
+                        try:
+                            reward_step = robot.get("reward_accum", 0) / max(1, robot.get("episode_steps", 1))
+                            done = float(sim.data.qpos[robot["qpos_start"] + 2]) < 0.4
+                            experience.record(
+                                robot_id=rid,
+                                model=sim.model,
+                                data=sim.data,
+                                action=actions[rid],
+                                reward=reward_step,
+                                done=done,
+                                qpos_start=robot["qpos_start"],
+                                qvel_start=robot["qvel_start"],
+                                act_start=robot["actuator_start"],
+                            )
+                        except Exception:
+                            pass  # experience collection is best-effort
+
             # Send telemetry for all robots
             if step % telemetry_every == 0:
                 for rid in robot_ids:
@@ -162,6 +192,7 @@ def main():
         log.info("Interrupted")
     finally:
         log.info("Cleaning up after %d steps", step)
+        experience.close()
         sim.close()
         for h in commands.values():
             h.close()

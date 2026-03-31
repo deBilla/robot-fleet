@@ -32,6 +32,9 @@ robot-fleet/
 - **Admin Console** — React SPA at `/admin/` for tenant management, API key lifecycle (create/revoke), and billing overview
 - **Multi-tenant Auth & Billing** — JWT + OAuth2/OIDC + DB-backed API key auth, RBAC (4 roles), per-tenant rate limiting, usage metering, Temporal-based billing workflows with dunning
 - **AI Inference** — SB3 PPO policy serving with hot model swap, per-robot model assignment, performance metrics feedback loop
+- **ML Training Pipeline** — Temporal orchestrates the full lifecycle: collect experience → submit Kubeflow training (GPU + Katib HPO) → evaluate → register → canary deploy. Custom `FleetOS-Humanoid-v1` Gymnasium env matches production physics
+- **Experience Collection** — Simulator records (obs, action, reward, done) transitions at 10 Hz → S3 NDJSON batches for offline RL. 376-dim Humanoid-v4 observations for policy compatibility
+- **Kubeflow Integration** — Dedicated GPU node group (g5.2xlarge, scale-from-zero), Katib for Bayesian HPO (20 trials, 3 parallel), PyTorchJob for distributed training, IRSA for S3 access
 - **Canary Model Deployment** — Progressive rollout (5% → 25% → 50% → 100%) via Temporal workflows with deterministic robot selection, live success_rate comparison, and automatic rollback
 - **Performance Metrics** — Reward computation (forward velocity + alive bonus - control cost), uptime tracking, fall detection — fed back to model registry for canary evaluation
 - **Durable Command Pipeline** — Commands flow through Kafka into Temporal workflows with full audit trail, ack tracking via Kafka topics, and automatic retries
@@ -65,13 +68,18 @@ robot-fleet/
 │  Inference :8081 (SB3 PPO policy)                │
 │    ├─ Per-robot model lookup                     │
 │    └─ Hot model swap from S3 registry            │
-│  Worker (Temporal)                               │
+│  Worker (Temporal — 5 task queues)                │
 │    ├─ CommandDispatchWorkflow                    │
 │    ├─ ModelDeploymentWorkflow (canary rollout)   │
+│    ├─ TrainingPipelineWorkflow → Kubeflow        │
 │    ├─ BillingCycleWorkflow (monthly invoicing)   │
 │    └─ WebhookFanoutWorkflow                      │
 │  Processor → Postgres/Redis/S3/ClickHouse        │
 │    └─ Performance metrics → model registry       │
+│  Kubeflow (ML compute — separate namespace)      │
+│    ├─ PyTorchJob on GPU nodes (g5.2xlarge)       │
+│    ├─ Katib HPO (Bayesian, 20 trials)            │
+│    └─ S3 artifacts (models + experience)         │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -185,6 +193,35 @@ Tenant created → Temporal BillingCycleWorkflow (monthly, continue-as-new)
   → Signals: change-tier, cancel-subscription, retry-payment
 ```
 
+### ML Training Pipeline (Temporal + Kubeflow)
+```
+Temporal TrainingPipelineWorkflow
+  ├─ CollectExperienceStats — check S3 for robot experience data
+  ├─ SubmitKubeflowRun — PyTorchJob (or Katib HPO) on GPU nodes
+  │     Training uses FleetOS-Humanoid-v1 env (custom lab_room.xml)
+  │     Optional: --base-model (fine-tune) + --from-experience (S3 data)
+  ├─ EvaluateTrainedModel — compare vs baseline (gate: ≥95% of baseline)
+  ├─ RegisterTrainedModel — model registry (staged)
+  └─ Auto-deploy → child ModelDeploymentWorkflow (canary rollout)
+
+Triggers: manual API, cron schedule, or success_rate drop below threshold
+```
+
+### RL Feedback Loop (Closed)
+```
+Robot runs in production/simulation
+  → Simulator computes reward per step (forward_vel + alive - ctrl_cost)
+  → Experience writer: (obs, action, reward, done) → S3 NDJSON batches
+  → Processor aggregates uptime → model registry success_rate
+                                                    ↓
+  success_rate drops? → Temporal triggers TrainingPipelineWorkflow
+  → Kubeflow trains on FleetOS-Humanoid-v1 + experience from S3
+  → New policy uploaded to S3 → registered as staged
+  → Canary deploy: 5% → 25% → 50% → 100% (with auto-rollback)
+  → Robots get new inference_model_id → inference uses it
+  → Performance metrics flow back → loop continues
+```
+
 ## Testing
 
 ```bash
@@ -198,8 +235,10 @@ go test -race ./internal/... ./test/...
 |-------|-------------|
 | Backend | Go 1.26, gRPC, Protocol Buffers, net/http |
 | Frontend | React 19, TypeScript, Three.js, Vite |
-| Orchestration | Temporal (commands, deployments, billing, webhooks) |
-| AI/ML | Python, SB3 PPO, MuJoCo Humanoid-v4 |
+| Orchestration | Temporal (commands, deployments, training pipeline, billing, webhooks) |
+| ML Training | Kubeflow (PyTorchJob, Katib HPO), SB3 PPO, custom Gymnasium env |
+| ML Compute | GPU nodes (g5.2xlarge), scale-from-zero, IRSA for S3 |
+| AI/ML | Python, SB3 PPO, MuJoCo Humanoid-v4, experience replay |
 | Messaging | Kafka (telemetry, commands, acks, deployment events) |
 | Storage | PostgreSQL 16, Redis 7, MinIO (S3), ClickHouse |
 | Analytics | Apache Spark, ClickHouse (OLAP) |

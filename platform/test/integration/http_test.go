@@ -42,9 +42,6 @@ func (r *testRepo) ListRobots(_ context.Context, _ string, limit, offset int) ([
 	}
 	return r.robots[offset:end], len(r.robots), nil
 }
-func (r *testRepo) StoreTelemetryEvent(_ context.Context, _, _ string, _ []byte, _ time.Time) error {
-	return nil
-}
 func (r *testRepo) StoreAPIUsage(_ context.Context, _, _, _ string, _ int, _ int64) error {
 	return nil
 }

@@ -182,18 +182,6 @@ func (s *PostgresStore) ListRobotsByInferenceModel(ctx context.Context, modelID 
 	return robots, nil
 }
 
-// StoreTelemetryEvent saves a raw telemetry event for historical queries.
-func (s *PostgresStore) StoreTelemetryEvent(ctx context.Context, robotID, eventType string, payload []byte, ts time.Time) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO telemetry_events (robot_id, event_type, payload, created_at)
-		VALUES ($1, $2, $3, $4)
-	`, robotID, eventType, payload, ts)
-	if err != nil {
-		return fmt.Errorf("store telemetry event for %s: %w", robotID, err)
-	}
-	return nil
-}
-
 // StoreAPIUsage records an API call for metering and billing.
 func (s *PostgresStore) StoreAPIUsage(ctx context.Context, tenantID, endpoint, method string, statusCode int, latencyMs int64) error {
 	_, err := s.pool.Exec(ctx, `

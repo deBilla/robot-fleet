@@ -4,3 +4,4 @@ grpcio==1.68.1
 grpcio-tools==1.68.1
 protobuf>=5.27
 numpy>=1.26
+minio>=7.2

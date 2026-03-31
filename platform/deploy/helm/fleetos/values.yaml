@@ -136,6 +136,48 @@ istio:
     canary:
       weight: 0  # 0-100 for canary traffic splitting
 
+# --- Kubeflow (MLOps) ---
+kubeflow:
+  enabled: true
+  namespace: kubeflow
+  training:
+    image:
+      repository: fleetos/training
+      tag: latest
+    defaultTimesteps: 2000000
+    defaultEnv: "FleetOS-Humanoid-v1"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+        nvidia.com/gpu: "1"
+      limits:
+        cpu: "4"
+        memory: 8Gi
+        nvidia.com/gpu: "1"
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    nodeSelector:
+      workload: training
+    s3:
+      bucket: fleetos-models
+      experiencePrefix: experience/
+  katib:
+    enabled: true
+    maxTrials: 20
+    parallelTrials: 3
+    parameters:
+      learningRate:
+        min: "0.0001"
+        max: "0.001"
+      batchSize:
+        values: ["32", "64", "128"]
+      nEpochs:
+        min: "5"
+        max: "15"
+
 # --- MinIO (S3-compatible) ---
 minio:
   enabled: true

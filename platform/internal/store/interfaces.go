@@ -15,7 +15,6 @@ type RobotRepository interface {
 	ListAllActiveRobots(ctx context.Context, since time.Time, limit int) ([]*RobotRecord, error)
 	UpdateRobotInferenceModel(ctx context.Context, robotID, modelID string) error
 	ListRobotsByInferenceModel(ctx context.Context, modelID string) ([]*RobotRecord, error)
-	StoreTelemetryEvent(ctx context.Context, robotID, eventType string, payload []byte, ts time.Time) error
 	StoreAPIUsage(ctx context.Context, tenantID, endpoint, method string, statusCode int, latencyMs int64) error
 	// Command audit trail (NFR7)
 	InsertCommandAudit(ctx context.Context, entry *CommandAuditEntry) error

@@ -113,6 +113,14 @@ func main() {
 	billingWorker.RegisterWorkflow(workflows.BillingCycleWorkflow)
 	billingWorker.RegisterActivity(billingActs)
 
+	// Training pipeline worker
+	trainingActs := &activities.TrainingActivities{Models: pg, Robots: pg}
+	trainingWorker := worker.New(tc, temporalpkg.TaskQueueTraining, worker.Options{})
+	trainingWorker.RegisterWorkflow(workflows.TrainingPipelineWorkflow)
+	trainingWorker.RegisterWorkflow(workflows.ModelDeploymentWorkflow) // child workflow for auto-deploy
+	trainingWorker.RegisterActivity(trainingActs)
+	trainingWorker.RegisterActivity(deployActs) // needed for canary child workflow
+
 	// Start Kafka-Temporal ack bridge (Kafka consumer → Temporal signal)
 	go temporalpkg.AckBridgeKafka(ctx, ackConsumer, tc)
 
@@ -122,13 +130,15 @@ func main() {
 		"deployment_queue", temporalpkg.TaskQueueDeployment,
 		"webhook_queue", temporalpkg.TaskQueueWebhook,
 		"billing_queue", temporalpkg.TaskQueueBilling,
+		"training_queue", temporalpkg.TaskQueueTraining,
 	)
 
-	errCh := make(chan error, 4)
+	errCh := make(chan error, 5)
 	go func() { errCh <- cmdWorker.Run(worker.InterruptCh()) }()
 	go func() { errCh <- deployWorker.Run(worker.InterruptCh()) }()
 	go func() { errCh <- whWorker.Run(worker.InterruptCh()) }()
 	go func() { errCh <- billingWorker.Run(worker.InterruptCh()) }()
+	go func() { errCh <- trainingWorker.Run(worker.InterruptCh()) }()
 
 	// Wait for first error or shutdown
 	select {

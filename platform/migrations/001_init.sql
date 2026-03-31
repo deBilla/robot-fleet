@@ -19,20 +19,6 @@ CREATE INDEX idx_robots_tenant ON robots(tenant_id);
 CREATE INDEX idx_robots_status ON robots(status);
 CREATE INDEX idx_robots_last_seen ON robots(last_seen);
 
-CREATE TABLE IF NOT EXISTS telemetry_events (
-    id          BIGSERIAL PRIMARY KEY,
-    robot_id    VARCHAR(64) NOT NULL REFERENCES robots(id),
-    event_type  VARCHAR(32) NOT NULL,  -- 'state', 'video', 'lidar', 'audio'
-    payload     BYTEA NOT NULL,
-    created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_telemetry_robot ON telemetry_events(robot_id, created_at DESC);
-CREATE INDEX idx_telemetry_type ON telemetry_events(event_type, created_at DESC);
-
--- Partitioned by time for scalability (create monthly partitions)
--- In production, use pg_partman or TimescaleDB for auto-partition management
-
 CREATE TABLE IF NOT EXISTS api_usage (
     id          BIGSERIAL PRIMARY KEY,
     tenant_id   VARCHAR(64) NOT NULL,

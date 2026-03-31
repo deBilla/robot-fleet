@@ -235,6 +235,92 @@ Processor starts Temporal workflow → Redis → Ingestion → gRPC StreamComman
 
 Watch inference: `docker logs -f platform-inference-1`
 
+## ML Training Pipeline (Temporal + Kubeflow)
+
+Training is orchestrated by Temporal and executed by Kubeflow on dedicated GPU nodes.
+
+```
+Temporal TrainingPipelineWorkflow (fleetos-training queue)
+  │
+  ├─ CollectExperienceStats
+  │     Query S3 for robot experience batches
+  │     (obs, action, reward, done) NDJSON from simulator
+  │
+  ├─ SubmitKubeflowRun ──────────► Kubeflow (kubeflow namespace)
+  │     │                            ├─ Katib HPO (Bayesian, 20 trials, 3 parallel)
+  │     │                            │    lr ∈ [0.0001, 0.001]
+  │     │                            │    batch ∈ {32, 64, 128}
+  │     │                            │    epochs ∈ [5, 15]
+  │     │                            ├─ PyTorchJob on g5.2xlarge GPU nodes
+  │     │                            │    FleetOS-Humanoid-v1 custom env
+  │     │                            │    7x sub-stepping, lab_room.xml physics
+  │     │                            └─ Artifacts → S3 (policy.zip, metrics.json)
+  │     └─ Waits for completion
+  │
+  ├─ EvaluateTrainedModel
+  │     Compare vs baseline: must be ≥ 95% of current success_rate
+  │     Gate: reject if degraded
+  │
+  ├─ RegisterTrainedModel → model registry (staged)
+  │
+  └─ Auto-deploy (if enabled)
+        └─ Child ModelDeploymentWorkflow (canary 5% → 25% → 50% → 100%)
+```
+
+**Separation of concerns:**
+- **Temporal** = orchestration brain (decides what, when, handles failures, gates, rollback)
+- **Kubeflow** = ML compute engine (GPU training, hyperparameter tuning, distributed jobs)
+
+### Experience Collection
+
+The simulator collects RL experience at runtime and writes to S3:
+
+```
+Simulator (50 Hz physics loop)
+  → Every 5th step: record (obs, action, reward, done)
+  → obs: 376-dim Humanoid-v4 observation (qpos, qvel, cinert, cvel, forces)
+  → Buffer 500 transitions → flush to S3 as NDJSON
+  → S3 key: experience/{date}/{robot_id}/batch_{timestamp}.ndjson
+```
+
+Training jobs can consume this experience for:
+- Pre-warming reward normalization (VecNormalize running stats)
+- Fine-tuning from deployed policy + real data
+- Future: offline RL (CQL, IQL, Decision Transformer)
+
+### Custom Training Environment
+
+`training/fleetos_env.py` registers `FleetOS-Humanoid-v1` — a Gymnasium env using `lab_room.xml`:
+- Same physics as production simulator (0.003s timestep × 7 sub-steps)
+- Same reward function (forward velocity + alive bonus - control cost)
+- Same floor friction, walls, obstacles
+- Ensures trained policy works in the environment it's deployed to
+
+### Training Modes
+
+```bash
+# From scratch on custom lab env (default)
+python train_locomotion.py --job-id job-001 --timesteps 2000000
+
+# Fine-tune from deployed model with experience data
+python train_locomotion.py --job-id job-002 --timesteps 500000 \
+  --base-model training/job-001/policy.zip \
+  --from-experience experience/
+
+# Use stock Gymnasium Humanoid-v4 (for comparison)
+python train_locomotion.py --job-id job-003 --env-id Humanoid-v4
+```
+
+### Infrastructure (Terraform + Helm)
+
+| Resource | Spec | Purpose |
+|----------|------|---------|
+| GPU node group | g5.2xlarge, 0-8, scale-from-zero | Kubeflow training jobs |
+| Kubeflow namespace | Istio-injected | ML workloads isolation |
+| IAM role (IRSA) | S3 read/write on models + training-data | Secure artifact access |
+| S3 lifecycle | experience/ → Glacier 30d → delete 180d | Cost management |
+| Katib | Bayesian optimization, 20 trials × 3 parallel | Hyperparameter search |
+
 ## Testing
 
 ```bash
@@ -293,6 +379,8 @@ platform/
 |   +-- middleware/             # Rate limiting, quota, metrics, logging, CORS, tracing
 |   +-- store/                  # PostgreSQL, Redis, S3, ClickHouse (interfaces + implementations)
 |   +-- temporal/               # Client, workflows, activities, Kafka ack bridge
+|   |   +-- workflows/          # Command, deployment, billing, training pipeline, webhook
+|   |   +-- activities/         # Command, deployment, billing, training, inference, webhook
 |   +-- config/                 # Environment-based configuration
 +-- ../playground/inference/     # Python inference service (deployed in platform stack)
 |   +-- server.py               # SB3 PPO policy serving + instruction bias

@@ -12,6 +12,7 @@ const (
 	TaskQueueDeployment = "fleetos-deployments"
 	TaskQueueWebhook    = "fleetos-webhooks"
 	TaskQueueBilling    = "fleetos-billing"
+	TaskQueueTraining   = "fleetos-training"
 )
 
 // NewClient creates a Temporal client connected to the given server.

@@ -10,6 +10,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY train_locomotion.py evaluate_policy.py ./
+COPY train_locomotion.py evaluate_policy.py fleetos_env.py ./
+COPY assets/ ./assets/
 
 USER trainer

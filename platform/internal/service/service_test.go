@@ -45,9 +45,6 @@ func (m *mockRepo) ListRobots(_ context.Context, _ string, limit, offset int) ([
 	}
 	return m.robots[offset:end], len(m.robots), nil
 }
-func (m *mockRepo) StoreTelemetryEvent(_ context.Context, _, _ string, _ []byte, _ time.Time) error {
-	return m.err
-}
 func (m *mockRepo) StoreAPIUsage(_ context.Context, _, _, _ string, _ int, _ int64) error {
 	return m.err
 }

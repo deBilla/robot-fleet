@@ -98,6 +98,32 @@ Web UI ("walk forward") → POST /api/v1/inference
 - **Joint Visualizer** — Per-joint angle bars with torque indicators
 - **Telemetry Stream** — Raw telemetry event log
 
+## Experience Collection for RL Training
+
+The simulator doubles as an experience collector for offline RL. Every 5th physics step, it records a transition and periodically flushes to S3:
+
+```
+Simulator (50 Hz control loop)
+  │
+  Every 5th step:
+  │  obs = 376-dim Humanoid-v4 observation
+  │       (qpos[2:], qvel, cinert, cvel, qfrc_actuator, cfrc_ext)
+  │  action = 17-dim MuJoCo control array (from command handler)
+  │  reward = forward_velocity + alive_bonus(5.0) - ctrl_cost(0.1·ctrl²)
+  │  done = height < 0.4m (fell)
+  │
+  Buffer 500 transitions → flush to S3 as NDJSON
+  │
+  S3: fleetos-models/experience/{date}/{robot_id}/batch_{ts}.ndjson
+```
+
+Each NDJSON line:
+```json
+{"robot_id":"robot-0001","obs":[1.4,0.0,...],"action":[0.1,-0.2,...],"reward":5.12,"done":false,"ts":1774915677.5}
+```
+
+The training pipeline (`platform/training/train_locomotion.py`) can consume this via `--from-experience experience/` to pre-warm reward normalization and fine-tune from real robot data.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -107,3 +133,7 @@ Web UI ("walk forward") → POST /api/v1/inference
 | `SIM_STEP_HZ` | 50 | Control loop rate (physics sub-steps 7x for real-time) |
 | `TELEMETRY_HZ` | 10 | Telemetry send rate |
 | `CONTROL_PORT` | 8085 | HTTP control server port |
+| `S3_ENDPOINT` | (empty) | MinIO/S3 endpoint for experience writing |
+| `S3_BUCKET` | fleetos-models | S3 bucket for experience batches |
+| `S3_ACCESS_KEY` | fleetos | S3 access key |
+| `S3_SECRET_KEY` | fleetos123 | S3 secret key |
