@@ -245,8 +245,209 @@ go test -race ./internal/... ./test/...
 | API | REST, WebSocket, OpenAPI 3.1, OAuth2/OIDC, JWT |
 | SDKs | TypeScript, Python |
 | Robotics | MuJoCo physics, ROS 2 (Humble) |
-| Infrastructure | Kubernetes, Docker, Helm, Terraform (AWS), Istio |
+| Infrastructure | Kubernetes, Docker, Helm, Terraform (AWS + OpenStack), Istio |
 | Observability | Prometheus, Grafana, OpenTelemetry |
+
+## Infrastructure (Terraform)
+
+FleetOS supports deployment on both **AWS** and **OpenStack**. Terraform configs live in `platform/deploy/terraform/` (AWS) and `platform/deploy/terraform/openstack/` (OpenStack).
+
+### AWS
+
+```mermaid
+graph TD
+    subgraph Networking
+        VPC[VPC 10.0.0.0/16<br/>3 AZs, public + private subnets]
+        ALB[ALB<br/>HTTPS :443 → API :8080]
+        NLB[NLB<br/>TCP :50051 → gRPC]
+        R53[Route53<br/>api / grpc / grafana / temporal]
+        ACM[ACM Wildcard Cert<br/>*.fleetos.dev]
+    end
+
+    subgraph Compute
+        EKS[EKS 1.29<br/>4 node groups]
+        EKS_GEN[general — m6i.xlarge<br/>2-10 nodes]
+        EKS_GPU[gpu — g5.xlarge<br/>0-5 nodes]
+        EKS_TRAIN[training — g5.2xlarge<br/>0-8, scale from zero]
+        EKS_KAFKA[kafka — r6i.xlarge<br/>3-6 nodes]
+    end
+
+    subgraph Data
+        RDS[(RDS PostgreSQL 16<br/>encrypted, multi-AZ)]
+        REDIS[(ElastiCache Redis 7<br/>failover, encryption)]
+        MSK[MSK Kafka 3.7<br/>3 brokers, 500GB each]
+        CH[ClickHouse EC2<br/>OLAP analytics]
+    end
+
+    subgraph Storage
+        S3_TEL[S3 telemetry<br/>Glacier 90d, delete 365d]
+        S3_MOD[S3 models<br/>versioned]
+        S3_TRAIN[S3 training-data<br/>Glacier 30d, delete 180d]
+        ECR[ECR x6 repos<br/>api, ingestion, processor<br/>worker, inference, training]
+    end
+
+    subgraph Orchestration
+        TEMPORAL[Temporal on ECS Fargate<br/>:7233 gRPC + :8233 UI]
+        CLOUDMAP[Cloud Map DNS<br/>temporal.fleetos.internal]
+        KUBEFLOW[Kubeflow namespace<br/>+ IRSA for S3]
+    end
+
+    subgraph Observability
+        AMP[Amazon Managed Prometheus]
+        AMG[Amazon Managed Grafana]
+        OTEL[OpenTelemetry Collector<br/>Helm on EKS]
+    end
+
+    subgraph Service Mesh
+        ISTIO_BASE[Istio Base]
+        ISTIOD[Istiod<br/>mTLS STRICT]
+        ISTIO_GW[Istio Ingress Gateway]
+    end
+
+    VPC --> EKS
+    VPC --> RDS
+    VPC --> REDIS
+    VPC --> MSK
+    VPC --> CH
+    VPC --> TEMPORAL
+    EKS --> EKS_GEN
+    EKS --> EKS_GPU
+    EKS --> EKS_TRAIN
+    EKS --> EKS_KAFKA
+    ALB --> EKS
+    NLB --> EKS
+    R53 --> ALB
+    R53 --> NLB
+    ACM --> ALB
+    TEMPORAL --> RDS
+    TEMPORAL --> CLOUDMAP
+    KUBEFLOW --> S3_MOD
+    KUBEFLOW --> S3_TRAIN
+    EKS --> ISTIO_BASE --> ISTIOD --> ISTIO_GW
+    EKS --> OTEL --> AMP
+    AMP --> AMG
+```
+
+### OpenStack
+
+```mermaid
+graph TD
+    subgraph Networking
+        ROUTER[Neutron Router<br/>external gateway]
+        NET_PLAT[Platform Network<br/>10.0.1.0/24]
+        NET_KAFKA[Kafka Network<br/>10.0.2.0/24]
+        FIP_LB[Floating IP<br/>Load Balancer]
+        FIP_HARBOR[Floating IP<br/>Harbor Registry]
+        LB[Octavia LB<br/>HTTP :80 / HTTPS :443 / gRPC :50051]
+    end
+
+    subgraph Security Groups
+        SG_K8S[k8s SG<br/>6443, 30000-32767, internal]
+        SG_PG[postgres SG<br/>5432 from k8s + temporal]
+        SG_REDIS[redis SG<br/>6379 from k8s]
+        SG_KAFKA[kafka SG<br/>9092-9093 from k8s]
+        SG_TEMPORAL[temporal SG<br/>7233, 8000, 8233]
+        SG_CH[clickhouse SG<br/>8123, 9000 from k8s]
+        SG_HARBOR[harbor SG<br/>443 from k8s + platform]
+    end
+
+    subgraph Compute
+        MAGNUM[Magnum K8s 1.29<br/>1-3 masters, 3-5 workers]
+        NG_GPU[GPU Node Group<br/>inference, 0-5 nodes]
+        NG_TRAIN[Training Node Group<br/>scale from zero, 0-8]
+    end
+
+    subgraph Stateful VMs
+        KAFKA[Kafka x3 VMs<br/>KRaft mode + 500GB Cinder]
+        REDIS_VM[Redis x1-3 VMs<br/>replication in prod]
+        TEMPORAL_VM[Temporal VM<br/>Docker Compose + PG backend]
+        CH_VM[ClickHouse VM<br/>dedicated Cinder volume]
+        HARBOR_VM[Harbor VM<br/>container registry + Trivy]
+    end
+
+    subgraph Data
+        TROVE[(Trove PostgreSQL 16<br/>tuned config)]
+        SWIFT_TEL[Swift telemetry]
+        SWIFT_MOD[Swift models<br/>versioned]
+        SWIFT_TRAIN[Swift training-data]
+    end
+
+    subgraph Secrets
+        BARBICAN_DB[Barbican DB password]
+        BARBICAN_ENC[Barbican Swift AES-256 key]
+        APP_CRED[Application Credential<br/>training pods → Swift]
+    end
+
+    subgraph DNS - Designate
+        DNS_ZONE[fleetos.internal zone]
+        DNS_API[api.fleetos.internal]
+        DNS_GRPC[grpc.fleetos.internal]
+        DNS_KAFKA[kafka-0/1/2.fleetos.internal]
+        DNS_REDIS[redis.fleetos.internal]
+        DNS_PG[postgres.fleetos.internal]
+        DNS_TEMP[temporal.fleetos.internal]
+        DNS_CH[clickhouse.fleetos.internal]
+        DNS_HARBOR[harbor.fleetos.internal]
+    end
+
+    subgraph K8s Workloads - Helm
+        ISTIO[Istio Service Mesh<br/>base → istiod → gateway]
+        PROM[kube-prometheus-stack<br/>Prometheus + Grafana]
+        OTEL_OS[OpenTelemetry Collector]
+        KUBEFLOW_OS[Kubeflow namespace<br/>+ Swift credentials secret]
+    end
+
+    ROUTER --> NET_PLAT
+    ROUTER --> NET_KAFKA
+    FIP_LB --> LB
+    LB --> MAGNUM
+    MAGNUM --> NG_GPU
+    MAGNUM --> NG_TRAIN
+    NET_PLAT --> TROVE
+    NET_PLAT --> REDIS_VM
+    NET_PLAT --> TEMPORAL_VM
+    NET_PLAT --> CH_VM
+    NET_PLAT --> HARBOR_VM
+    NET_KAFKA --> KAFKA
+    TEMPORAL_VM --> TROVE
+    APP_CRED --> KUBEFLOW_OS
+    FIP_HARBOR --> HARBOR_VM
+    MAGNUM --> ISTIO
+    MAGNUM --> PROM
+    MAGNUM --> OTEL_OS
+    MAGNUM --> KUBEFLOW_OS
+    DNS_ZONE --> DNS_API
+    DNS_ZONE --> DNS_GRPC
+    DNS_ZONE --> DNS_KAFKA
+    DNS_ZONE --> DNS_REDIS
+    DNS_ZONE --> DNS_PG
+    DNS_ZONE --> DNS_TEMP
+    DNS_ZONE --> DNS_CH
+    DNS_ZONE --> DNS_HARBOR
+    DNS_API --> FIP_LB
+    DNS_GRPC --> FIP_LB
+    DNS_HARBOR --> FIP_HARBOR
+```
+
+### Resource Comparison
+
+| Component | AWS | OpenStack |
+|-----------|-----|-----------|
+| Kubernetes | EKS (managed) | Magnum |
+| Database | RDS PostgreSQL 16 | Trove PostgreSQL 16 |
+| Cache | ElastiCache Redis 7 | Compute VMs + userdata |
+| Message Broker | MSK Kafka 3.7 | Compute VMs + KRaft + Cinder |
+| Object Storage | S3 (encrypted, lifecycle) | Swift (versioned) |
+| Container Registry | ECR (6 repos) | Harbor VM |
+| Workflow Engine | Temporal on ECS Fargate | Temporal on Compute VM |
+| Analytics OLAP | ClickHouse on EC2 | ClickHouse on Compute VM |
+| Load Balancer | ALB + NLB | Octavia |
+| DNS | Route53 | Designate |
+| TLS Certificates | ACM | Manual / Barbican |
+| Secrets | Secrets Manager | Barbican |
+| Monitoring | Amazon Managed Prometheus + Grafana | kube-prometheus-stack (Helm) |
+| Tracing | OTEL Collector → AMP | OTEL Collector (Helm) |
+| Service Mesh | Istio (Helm) | Istio (Helm) |
 
 ## License
 
