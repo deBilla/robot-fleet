@@ -33,7 +33,7 @@ func TestBillingCycleWorkflow_HappyPath(t *testing.T) {
 
 	env.ExecuteWorkflow(BillingCycleWorkflow, BillingCycleInput{
 		TenantID:    "tenant-1",
-		PeriodStart: "2026-03-01",
+		PeriodStart: "2099-01-01",
 		Tier:        "pro",
 	})
 
@@ -71,7 +71,7 @@ func TestBillingCycleWorkflow_ZeroAmountInvoice(t *testing.T) {
 
 	env.ExecuteWorkflow(BillingCycleWorkflow, BillingCycleInput{
 		TenantID:    "tenant-free",
-		PeriodStart: "2026-03-01",
+		PeriodStart: "2099-01-01",
 		Tier:        "free",
 	})
 
@@ -110,7 +110,7 @@ func TestBillingCycleWorkflow_TierChangeSignal(t *testing.T) {
 
 	env.ExecuteWorkflow(BillingCycleWorkflow, BillingCycleInput{
 		TenantID:    "tenant-1",
-		PeriodStart: "2026-03-01",
+		PeriodStart: "2099-01-01",
 		Tier:        "pro",
 	})
 
@@ -145,7 +145,7 @@ func TestBillingCycleWorkflow_CancelSubscription(t *testing.T) {
 
 	env.ExecuteWorkflow(BillingCycleWorkflow, BillingCycleInput{
 		TenantID:    "tenant-1",
-		PeriodStart: "2026-03-01",
+		PeriodStart: "2099-01-01",
 		Tier:        "pro",
 	})
 
