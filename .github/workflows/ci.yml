@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  AWS_REGION: us-east-1
-  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
-
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -59,8 +55,11 @@ jobs:
           go-version: "1.26"
       - name: Run migrations
         run: |
-          psql "postgres://fleetos:fleetos@localhost:5432/fleetos?sslmode=disable" -f migrations/001_init.sql
-          psql "postgres://fleetos:fleetos@localhost:5432/fleetos?sslmode=disable" -f migrations/002_command_audit.sql
+          for f in migrations/*.sql; do
+            psql "$POSTGRES_DSN" -f "$f"
+          done
+        env:
+          POSTGRES_DSN: postgres://fleetos:fleetos@localhost:5432/fleetos?sslmode=disable
       - name: Run tests
         env:
           POSTGRES_DSN: postgres://fleetos:fleetos@localhost:5432/fleetos?sslmode=disable
@@ -73,68 +72,11 @@ jobs:
 
   docker-build:
     needs: [lint, test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
     strategy:
       matrix:
-        service: [api, ingestion, processor, worker]
+        service: [api, ingestion, processor, worker, inference]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set image tag
-        id: tag
-        run: echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push Docker image
-        run: |
-          IMAGE="${{ env.ECR_REGISTRY }}/fleetos/${{ matrix.service }}:${{ steps.tag.outputs.tag }}"
-          IMAGE_LATEST="${{ env.ECR_REGISTRY }}/fleetos/${{ matrix.service }}:latest"
-          docker build -f platform/deploy/docker/Dockerfile.${{ matrix.service }} -t "$IMAGE" -t "$IMAGE_LATEST" .
-          docker push "$IMAGE"
-          docker push "$IMAGE_LATEST"
-
-  deploy:
-    needs: docker-build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name fleetos-cluster --region ${{ env.AWS_REGION }}
-
-      - name: Set image tag
-        id: tag
-        run: echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy via Helm
-        run: |
-          helm upgrade --install fleetos platform/deploy/helm/fleetos \
-            --set api.image.tag=${{ steps.tag.outputs.tag }} \
-            --set ingestion.image.tag=${{ steps.tag.outputs.tag }} \
-            --set inference.image.tag=${{ steps.tag.outputs.tag }} \
-            --set simulator.image.tag=${{ steps.tag.outputs.tag }} \
-            --set global.imageRegistry=${{ env.ECR_REGISTRY }} \
-            --wait --timeout 10m
+      - name: Build Docker image
+        run: docker build -f platform/deploy/docker/Dockerfile.${{ matrix.service }} -t fleetos/${{ matrix.service }}:ci .
