@@ -2,6 +2,8 @@
 
 This document maps the six stages of the ML lifecycle to the FleetOS codebase, identifies gaps, and proposes next steps.
 
+Why the walking policy doesn't walk yet, the experiments run so far, current research and the plan: [locomotion-research.md](locomotion-research.md).
+
 ```
 Problem Framing → High-Level Design → Data & Features → Modelling → Inference & Evaluation → Deep Dives
 ```
