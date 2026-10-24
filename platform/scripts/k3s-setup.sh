@@ -63,7 +63,7 @@ preflight() {
     # Images (~5GB) + the Colima VM disk grow on the host; running out mid-build
     # leaves half-written layers behind.
     local free_gb
-    free_gb=$(df -g / | awk 'NR==2 {print $4}')
+    free_gb=$(df -k / | awk 'NR==2 {print int($4/1024/1024)}')
     if [ "${free_gb:-0}" -lt "$MIN_FREE_DISK_GB" ]; then
         warn "Only ${free_gb}GB free on / (recommended >= ${MIN_FREE_DISK_GB}GB)."
         warn "Free space with: docker builder prune -af && colima ssh -- sudo fstrim -av"
