@@ -375,3 +375,35 @@ def test_load_model_serves_stub_for_incompatible_policy(fake_sb3, tmp_path, monk
     monkeypatch.setattr(server, "MODEL_PATH", tmp_path / "humanoid-v4-ppo")
     (tmp_path / "humanoid-v4-ppo.zip").write_bytes(b"zip")  # cached model, no policy_meta.json
     assert isinstance(server.load_model(), server._StubPolicy)
+
+
+
+# ─── Action versions ────────────────────────────────────────────
+
+def _meta(dir_, action_version=None):
+    meta = {"obs_version": server.OBS_VERSION}
+    if action_version is not None:
+        meta["action_version"] = action_version
+    (dir_ / server.META_FILENAME).write_text(json.dumps(meta))
+
+
+def test_residual_policy_is_served_as_joint_targets(fake_sb3, tmp_path):
+    fake_sb3.PPO.load.return_value = FakePolicy(1.0)
+    _meta(tmp_path, server.ACTION_RESIDUAL)
+    policy = server.load_policy_file(str(tmp_path / "policy"))
+    targets, _ = policy.predict(np.zeros(server.OBS_DIM), deterministic=True)
+    expected = server.STAND_JOINT_ANGLE + server.RESIDUAL_SCALE
+    assert np.asarray(targets) == pytest.approx(np.full(server.MUJOCO_ACTION_DIM, expected))
+
+
+def test_policy_without_action_version_is_served_unchanged(fake_sb3, tmp_path):
+    model = FakePolicy(1.0)
+    fake_sb3.PPO.load.return_value = model
+    _meta(tmp_path)  # predates action versions: absolute joint targets
+    assert server.load_policy_file(str(tmp_path / "policy")) is model
+
+
+def test_unknown_action_version_is_refused(fake_sb3, tmp_path):
+    _meta(tmp_path, 99)
+    with pytest.raises(server.IncompatiblePolicy, match="action version 99"):
+        server.load_policy_file(str(tmp_path / "policy"))

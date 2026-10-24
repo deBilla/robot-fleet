@@ -18,6 +18,7 @@ from gymnasium.envs.registration import register
 
 from observation import build_observation_from_mujoco, OBS_DIM, NUM_ACTUATORS
 from locomotion_reward import MAX_EPISODE_STEPS, control_cost, has_fallen, locomotion_reward
+from policy_action import RESIDUAL, to_joint_targets
 
 ASSETS_DIR = Path(__file__).parent / "assets"
 LAB_XML = ASSETS_DIR / "lab_room.xml"
@@ -30,7 +31,7 @@ class FleetOSHumanoidEnv(gym.Env):
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 50}
 
-    def __init__(self, render_mode=None, max_episode_steps=MAX_EPISODE_STEPS):
+    def __init__(self, render_mode=None, max_episode_steps=MAX_EPISODE_STEPS, action_version=RESIDUAL):
         super().__init__()
 
         if not LAB_XML.exists():
@@ -47,10 +48,16 @@ class FleetOSHumanoidEnv(gym.Env):
         self._root_qpos_adr = self.model.jnt_qposadr[self._root_jnt_id]
         self._root_dof_adr = self.model.jnt_dofadr[self._root_jnt_id]
 
-        # Action space: position targets for each actuator (from XML ctrl ranges)
-        low = self.model.actuator_ctrlrange[:, 0].astype(np.float32)
-        high = self.model.actuator_ctrlrange[:, 1].astype(np.float32)
-        self.action_space = spaces.Box(low=low, high=high, dtype=np.float32)
+        # Actions map to joint position targets per policy_action.py; physics
+        # applies each actuator's ctrlrange. Training uses RESIDUAL; the test
+        # track evaluates older ABSOLUTE policies in their own version.
+        self.action_version = action_version
+        self._ctrl_low = self.model.actuator_ctrlrange[:, 0].astype(np.float32)
+        self._ctrl_high = self.model.actuator_ctrlrange[:, 1].astype(np.float32)
+        if action_version == RESIDUAL:
+            self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(NUM_ACTUATORS,), dtype=np.float32)
+        else:
+            self.action_space = spaces.Box(low=self._ctrl_low, high=self._ctrl_high, dtype=np.float32)
 
         # Unified 86-dim observation
         self.observation_space = spaces.Box(
@@ -109,7 +116,7 @@ class FleetOSHumanoidEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action):
-        action = np.clip(action, self.action_space.low, self.action_space.high)
+        action = np.clip(to_joint_targets(action, self.action_version), self._ctrl_low, self._ctrl_high)
         self.data.ctrl[:NUM_ACTUATORS] = action
 
         for _ in range(N_SUBSTEPS):

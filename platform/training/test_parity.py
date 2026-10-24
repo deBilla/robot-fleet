@@ -17,7 +17,7 @@ SIMULATOR = REPO / "playground" / "simulator"
 pytestmark = pytest.mark.skipif(not SIMULATOR.is_dir(), reason="playground/simulator not present in this checkout")
 
 
-@pytest.mark.parametrize("rel", ["observation.py", "locomotion_reward.py", "policy_meta.py", "assets/lab_room.xml"])
+@pytest.mark.parametrize("rel", ["observation.py", "locomotion_reward.py", "policy_meta.py", "policy_action.py", "assets/lab_room.xml"])
 def test_simulator_and_training_files_are_identical(rel):
     train, sim = (TRAINING / rel).read_bytes(), (SIMULATOR / rel).read_bytes()
     assert train == sim, f"{rel} differs between platform/training and playground/simulator"
@@ -82,3 +82,13 @@ def test_robots_and_test_track_share_the_episode_cap():
     assert FleetOSHumanoidEnv()._max_episode_steps == MAX_EPISODE_STEPS
     sim_src = (REPO / "playground" / "simulator" / "mujoco_env.py").read_text()
     assert "MAX_EPISODE_STEPS" in sim_src, "robots must truncate episodes like the test track"
+
+
+@pytest.mark.parametrize("name", ["ABSOLUTE", "RESIDUAL", "RESIDUAL_SCALE", "STAND_JOINT_ANGLE"])
+def test_inference_maps_actions_like_the_robots(name):
+    # The inference service can't import policy_action.py (separate image), so it
+    # mirrors these constants; a drift would move joints differently than training.
+    import policy_action
+    server = REPO / "platform" / "inference" / "server.py"
+    assert _module_constant(server, f"ACTION_{name}" if name in ("ABSOLUTE", "RESIDUAL") else name) \
+        == getattr(policy_action, name), f"inference {name} differs from policy_action.py"

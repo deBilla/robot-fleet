@@ -19,7 +19,7 @@ Problem Framing → High-Level Design → Data & Features → Modelling → Infe
 | Task | Forward locomotion — walk without falling |
 | Robot | MuJoCo humanoid, 25 actuators (abdomen, legs, arms, grippers) |
 | Observation | 86-dim unified vector: joint pos/vel (50), root quat/vel (10), hand positions (6), grippers (4), objects (12), task encoding (4) |
-| Action | 25-dim position targets (joint angles in radians, PD-controlled) |
+| Action | 25-dim, PD-controlled joint position targets. Locomotion policies output residual actions in [-1, 1]: offsets of up to 0.5 rad from the standing pose (`policy_action.py`, action version 2); older and reach policies output absolute targets (version 1) |
 | Reward | `forward_velocity + 1.0 − 0.1 * control_cost` (locomotion); sparse -1/0 for HER (reach, grasp) |
 | Termination | Torso height < 1.0 m (fallen; a crouch counts — at 0.3 m PPO learned to crawl at 0.57 m instead of balancing) |
 | Episode length | Max 1000 steps |
