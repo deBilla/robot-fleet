@@ -585,6 +585,12 @@ graph TD
 | Tracing | OTEL Collector → AMP | OTEL Collector (Helm) |
 | Service Mesh | Istio (Helm) | Istio (Helm) |
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and conventions,
+and [open issues](https://github.com/deBilla/robot-fleet/issues) for places to start
+(`good first issue`, `help wanted`).
+
 ## License
 
-MIT
+[MIT](LICENSE)
