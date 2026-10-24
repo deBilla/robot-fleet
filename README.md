@@ -1,6 +1,34 @@
 # FleetOS
 
-A distributed robot fleet management platform that connects simulated humanoid robots to the cloud via gRPC/Kafka, exposes developer-facing REST/WebSocket APIs with auth and billing, serves AI inference through SB3 PPO policies, and provides full-stack analytics via Spark + ClickHouse.
+An open, end-to-end platform for **robot fleets that learn from their own experience**. Simulated
+MuJoCo humanoids stream telemetry to a cloud "brain" (Go services, Kafka, Temporal). The brain
+trains new walking policies offline from what the fleet actually did, tests each one on a
+simulated test track, and rolls it back out through a gated canary. Around that loop sit the
+pieces a real fleet product needs: REST/WebSocket APIs with multi-tenant auth and billing, a
+model registry, analytics, and Kubernetes deployment (kind, k3s, Terraform for AWS and OpenStack).
+
+**Architecture: cloud brain, robot body.** The platform decides which policy each robot runs. The
+robot runs that policy locally every control tick.
+
+## Project status
+
+| Area | State |
+|------|-------|
+| Platform (telemetry, commands, APIs, auth, billing, registry, canary) | Working; Go tests with `-race` in CI |
+| Learning loop (fleet data → offline CQL → test track → gate → canary) | Working end to end on local k3s (CPU), with Argo or Kubeflow Trainer + Katib |
+| Walking | **Not solved yet.** The best policy (PPO with residual actions) stays upright ~1.6 s (median) before falling, measured both on the test track and on the fleet. Work is paused; see [locomotion research](platform/docs/locomotion-research.md) and issue [#9](https://github.com/deBilla/robot-fleet/issues/9) |
+| Cloud (AWS / OpenStack Terraform) | Designed, not verified |
+
+## Documentation
+
+| Doc | What's in it |
+|-----|--------------|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, the exact CI test commands, conventions, the train/serve parity rule |
+| [platform/docs/architecture.md](platform/docs/architecture.md) | Mermaid diagrams: system, telemetry, commands, canary, training, billing, storage |
+| [platform/docs/ml-pipeline.md](platform/docs/ml-pipeline.md) | The learning loop in detail: data, offline training, evaluation, gate, contracts |
+| [platform/docs/locomotion-research.md](platform/docs/locomotion-research.md) | Walking experiments E1–E5 (measured), current research, lessons learned, where to pick up |
+| [platform/docs/openapi.yaml](platform/docs/openapi.yaml) | REST API spec (OpenAPI 3.1) |
+| [CLAUDE.md](CLAUDE.md) | Detailed engineering guide (written for AI assistants, useful for humans) |
 
 ## Repository Structure
 
@@ -19,7 +47,7 @@ robot-fleet/
 │   ├── training/           # Offline CQL from fleet data (pipeline) + PPO/SAC/BC/autoencoder scripts
 │   └── docker-compose.yml  # Full platform stack (17 services)
 └── playground/             # Robot simulator (MuJoCo + React 3D)
-    ├── simulator/          # MuJoCo Humanoid-v4 physics + gRPC telemetry
+    ├── simulator/          # MuJoCo humanoids in a lab room, gRPC telemetry, on-robot policy execution
     ├── web/                # React + Three.js 3D dashboard
     ├── ros2_bridge/        # ROS 2 topic bridge
     ├── proto/              # Protobuf definitions (simulator copy)
@@ -42,7 +70,8 @@ robot-fleet/
 - **Durable Command Pipeline** — Commands flow through Kafka into Temporal workflows with full audit trail, ack tracking via Kafka topics, and automatic retries
 - **Semantic Commands** — Natural language robot control via extensible command registry (strategy pattern)
 - **Model Registry** — Model lifecycle (staged → canary → deployed → archived) with S3 artifacts and per-robot model assignment
-- **Edge Policy Execution** — Robots run their assigned walking policy locally every control tick (47.6 Hz, as trained) instead of asking the cloud ~10×/s with stale observations; the platform still decides which model each robot runs (`GET /api/v1/robots/{id}/policy`, canary-aware). Robots and the test track share the observation builder, scene and reward/fall rule, enforced byte-for-byte by `platform/training/test_parity.py`. Observations are egocentric (relative to the robot, version 3), and every policy carries `policy_meta.json` so robots and inference refuse a policy built for a different observation layout
+- **Edge Policy Execution** — Robots run their assigned walking policy locally every control tick (47.6 Hz, as trained) instead of asking the cloud ~10×/s with stale observations; the platform still decides which model each robot runs (`GET /api/v1/robots/{id}/policy`, canary-aware). Robots and the test track share the observation builder, scene, reward/fall rule (torso below 1.0 m, episodes capped at 1,000 ticks) and action mapping, enforced byte-for-byte by `platform/training/test_parity.py`
+- **Versioned policy contracts** — Every policy carries `policy_meta.json` with an `obs_version` (observations are egocentric, version 3) and an `action_version` (1 = absolute joint targets, 2 = residual offsets of up to 0.5 rad around the standing pose, the locomotion default). Robots, inference and the test track refuse versions they don't know, and fleet experience always records the joint targets actually applied
 - **Analytics Pipeline** — S3 (raw NDJSON) → Spark (batch) → ClickHouse (OLAP) → Redis (cache) → API
 - **ROS 2 Integration** — Bridge node publishing to standard ROS 2 topics (JointState, PoseStamped, BatteryState, LaserScan)
 - **Cloud-native Infrastructure** — Kubernetes, Helm, Terraform (AWS), Docker Compose, Istio service mesh (mTLS)
@@ -54,7 +83,7 @@ robot-fleet/
 
 ```
 ┌─ Playground (Robot) ─────────────────────────────┐
-│  MuJoCo Humanoid-v4 Physics Simulation           │
+│  MuJoCo humanoids + on-robot policy (47.6 Hz)    │
 │    ├─ gRPC StreamTelemetry → ingestion:50051     │  (joints, pose, metrics)
 │    ├─ gRPC StreamCommands ← ingestion:50051      │  (walk, wave, inference)
 │    └─ HTTP :8085 /spawn, /robots                 │
@@ -96,9 +125,12 @@ robot-fleet/
 ### Prerequisites
 
 - Docker & Docker Compose
-- Go 1.26+ (for local development)
-- Node.js 20+ (for admin console development)
-- kind, kubectl, helm (for Kubernetes mode)
+- Go 1.26+ and Python 3.12 (for local development and tests)
+- Node.js 20+ (for web UI development)
+- kind, kubectl, helm (Option B) or Colima (Option C)
+
+Every local Kubernetes command passes an explicit `--context` (`kind-…` or `colima`), so it never
+touches whatever cluster your shell currently points at.
 
 ### Option A: Docker Compose (simplest)
 
@@ -353,17 +385,27 @@ Robots run (simulation today)
     pass rate / baseline
   → New policy uploaded to S3 → registered as staged (with its dataset manifest)
   → Canary deploy: assign 5% → observe → 25% → 50% → 100% (with auto-rollback)
-  → Robots get new inference_model_id → API inference requests are routed to that artifact
-    (the simulator still calls inference directly and gets the fleet-wide active model)
+  → Robots get a new model assignment → each fetches it (GET /api/v1/robots/{id}/policy) and
+    runs it locally every tick; API inference requests are routed to the same artifact
   → The new policy's behaviour becomes the next dataset → loop continues
+
+With a small fleet, canary stages round down: with 1 robot, the 5/25/50% stages assign nobody
+and only the final step switches the robot over.
 ```
 
 ## Testing
 
+CI runs Go (gofmt, vet, `-race` tests), four Python suites, Helm/manifest validation, shellcheck
+and Docker builds on every pull request. The main ones:
+
 ```bash
-cd platform
-go test -race ./internal/... ./test/...
+cd platform && go test -race ./...                        # Go (Postgres/Redis on localhost)
+cd platform/training && python -m pytest -q               # training, test track, parity checks
+cd playground/simulator && python -m pytest -q            # simulator and on-robot policy
+cd platform/inference && python -m pytest -q              # inference service
 ```
+
+The full list, with setup, is in [CONTRIBUTING.md](CONTRIBUTING.md#running-the-tests).
 
 ## Tech Stack
 
@@ -386,7 +428,10 @@ go test -race ./internal/... ./test/...
 
 ## Infrastructure (Terraform)
 
-FleetOS supports deployment on both **AWS** and **OpenStack**. Terraform configs live in `platform/deploy/terraform/` (AWS) and `platform/deploy/terraform/openstack/` (OpenStack).
+FleetOS has Terraform designs for **AWS** and **OpenStack** in `platform/deploy/terraform/` (AWS) and `platform/deploy/terraform/openstack/` (OpenStack). Neither has been applied to a real account yet; everything verified so far runs locally (Docker Compose, kind, k3s).
+
+<details>
+<summary>AWS and OpenStack diagrams and comparison</summary>
 
 ### AWS
 
@@ -584,6 +629,8 @@ graph TD
 | Monitoring | Amazon Managed Prometheus + Grafana | kube-prometheus-stack (Helm) |
 | Tracing | OTEL Collector → AMP | OTEL Collector (Helm) |
 | Service Mesh | Istio (Helm) | Istio (Helm) |
+
+</details>
 
 ## Contributing
 
