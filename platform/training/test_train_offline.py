@@ -90,15 +90,13 @@ def test_offline_spaces_match_the_policy_contract():
     assert env.action_space.shape == (to.ACT_DIM,)
 
 
-def test_offline_action_space_is_each_joints_control_range_like_the_test_track():
-    # Robots and the test track accept each actuator's full ctrlrange (knee to
-    # -2.8 rad); a [-1, 1] policy could never command those joint targets.
+def test_offline_action_space_is_the_residual_unit_box_like_the_test_track():
+    # Offline policies act like online ones: offsets around the standing pose.
     from fleetos_env import FleetOSHumanoidEnv
     track = FleetOSHumanoidEnv().action_space
     space = to.OfflineSpaces().action_space
     np.testing.assert_array_equal(space.low, track.low)
     np.testing.assert_array_equal(space.high, track.high)
-    assert space.low.min() < -1.0
 
 
 def _model(tmp_path, buffer_size=8):
@@ -106,31 +104,32 @@ def _model(tmp_path, buffer_size=8):
     return to.make_model(args, buffer_size=buffer_size)
 
 
-def test_replay_buffer_holds_fleet_actions_in_sacs_scaled_space(tmp_path):
+def test_replay_buffer_holds_fleet_joint_targets_as_residual_actions(tmp_path):
+    # Fleet experience records the joint targets robots applied; the policy learns
+    # the residual action that produces them.
+    import policy_action as pa
     model = _model(tmp_path)
-    low, high = to.OfflineSpaces().action_space.low, to.OfflineSpaces().action_space.high
-    actions = np.stack([low, high, (low + high) / 2, high + 5.0])  # last: out of range
+    stand, scale = pa.STAND_POSE, pa.RESIDUAL_SCALE
+    targets = np.stack([stand, stand + scale, stand - scale / 2, stand + 5.0])  # last: beyond the residual range
     data = {
         "observations": np.zeros((4, to.OBS_DIM), dtype=np.float32),
         "next_observations": np.zeros((4, to.OBS_DIM), dtype=np.float32),
-        "actions": actions.astype(np.float32),
+        "actions": targets.astype(np.float32),
         "rewards": np.zeros(4, dtype=np.float32),
         "dones": np.zeros(4, dtype=np.float32),
     }
     to.fill_replay_buffer(model, data)
     stored = model.replay_buffer.actions[:4, 0]
-    np.testing.assert_allclose(stored[0], -1.0, atol=1e-5)
+    np.testing.assert_allclose(stored[0], 0.0, atol=1e-5)
     np.testing.assert_allclose(stored[1], 1.0, atol=1e-5)
-    np.testing.assert_allclose(stored[2], 0.0, atol=1e-5)
-    np.testing.assert_allclose(stored[3], 1.0, atol=1e-5)  # clipped to the joint's range
+    np.testing.assert_allclose(stored[2], -0.5, atol=1e-5)
+    np.testing.assert_allclose(stored[3], 1.0, atol=1e-5)  # clipped to the residual range
 
 
-def test_trained_policy_acts_in_joint_units(tmp_path):
+def test_trained_policy_acts_in_the_residual_unit_box(tmp_path):
     model = _model(tmp_path)
     action, _ = model.predict(np.zeros(to.OBS_DIM, dtype=np.float32), deterministic=True)
-    space = to.OfflineSpaces().action_space
-    assert np.all(action >= space.low - 1e-5) and np.all(action <= space.high + 1e-5)
-    np.testing.assert_allclose(model.policy.unscale_action(np.ones(to.ACT_DIM)), space.high, rtol=1e-6)
+    assert np.all(np.abs(action) <= 1.0 + 1e-5)
 
 
 # --- dataset loading -------------------------------------------------------------

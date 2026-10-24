@@ -98,6 +98,12 @@ OBS_DIM = 86
 # platform/training/observation.py OBS_VERSION (checked by test_parity.py).
 OBS_VERSION = 3
 META_FILENAME = "policy_meta.json"
+# How policy outputs map to joint targets. Mirrors policy_action.py in
+# platform/training and playground/simulator (checked by test_parity.py).
+ACTION_ABSOLUTE = 1        # outputs are the joint targets (policies without an action_version)
+ACTION_RESIDUAL = 2        # outputs in [-1, 1] offset the standing pose by up to RESIDUAL_SCALE
+RESIDUAL_SCALE = 0.5       # rad
+STAND_JOINT_ANGLE = 0.0    # rad: every joint in lab_room.xml's "stand" keyframe
 # Also accept legacy 376-dim for backward compatibility
 LEGACY_OBS_DIM = 376
 
@@ -510,16 +516,38 @@ class IncompatiblePolicy(RuntimeError):
     """The policy was trained on a different observation layout; never serve it."""
 
 
-def policy_incompatibility(meta_path: str) -> str | None:
-    """Why the policy whose policy_meta.json is at meta_path can't be served, or None."""
+def read_policy_meta(meta_path: str) -> dict | None:
     if not os.path.exists(meta_path):
+        return None
+    with open(meta_path) as f:
+        return json.load(f)
+
+
+def policy_incompatibility(meta: dict | None) -> str | None:
+    """Why a policy with this policy_meta.json can't be served, or None."""
+    if meta is None:
         return (f"no {META_FILENAME}: policy predates observation version {OBS_VERSION} "
                 "(world-frame observations); retrain it")
-    with open(meta_path) as f:
-        version = json.load(f).get("obs_version")
+    version = meta.get("obs_version")
     if version != OBS_VERSION:
         return f"policy uses observation version {version}, this build uses {OBS_VERSION}; retrain it"
+    action_version = meta.get("action_version", ACTION_ABSOLUTE)
+    if action_version not in (ACTION_ABSOLUTE, ACTION_RESIDUAL):
+        return f"policy uses action version {action_version}, this build supports 1 and 2"
     return None
+
+
+class JointTargetPolicy:
+    """Serves a residual policy's outputs as joint targets around the standing pose."""
+
+    def __init__(self, policy):
+        self._policy = policy
+        self.observation_space = getattr(policy, "observation_space", None)
+
+    def predict(self, obs, deterministic=False):
+        action, state = self._policy.predict(obs, deterministic=deterministic)
+        offsets = RESIDUAL_SCALE * np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+        return STAND_JOINT_ANGLE + offsets, state
 
 
 def load_policy_file(path: str):
@@ -527,17 +555,21 @@ def load_policy_file(path: str):
 
     Locomotion policies are PPO; reach/grasp policies are SAC (+HER). The zip
     doesn't say which, so try PPO first and fall back to SAC. Policies trained
-    on another observation version are refused (IncompatiblePolicy).
+    on another observation version are refused (IncompatiblePolicy); residual
+    policies are wrapped so every served action is joint targets.
     """
-    reason = policy_incompatibility(str(Path(path).parent / META_FILENAME))
+    meta = read_policy_meta(str(Path(path).parent / META_FILENAME))
+    reason = policy_incompatibility(meta)
     if reason:
         raise IncompatiblePolicy(f"{path}: {reason}")
-    model = _load_sb3(path)
+    policy = _load_sb3(path)
     normalize = load_obs_normalizer(normalizer_path(path))
     if normalize is not None:
         log.info("[Model] Applying observation normalization from %s", normalizer_path(path))
-        return NormalizedPolicy(model, normalize)
-    return model
+        policy = NormalizedPolicy(policy, normalize)
+    if meta.get("action_version", ACTION_ABSOLUTE) == ACTION_RESIDUAL:
+        policy = JointTargetPolicy(policy)
+    return policy
 
 
 def _load_sb3(path: str):

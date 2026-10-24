@@ -29,8 +29,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import gymnasium as gym
-import mujoco
 import numpy as np
+from policy_action import RESIDUAL, from_joint_targets
 from policy_meta import write_policy_meta
 import torch
 import torch.nn.functional as F
@@ -40,22 +40,15 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 # Policy contract shared with the simulator and inference service.
 OBS_DIM = 86
 ACT_DIM = 25
-# SAC acts and learns in a [-1, 1] box and rescales to the action space's
-# bounds; fleet actions are rescaled into it when loaded (fill_replay_buffer).
+# Policies act in policy_action's RESIDUAL unit box, which is also SAC's own
+# scaled action space; fleet joint targets are converted into it when loaded.
 SCALED_ACTION_LOW, SCALED_ACTION_HIGH = -1.0, 1.0
-LAB_XML = Path(__file__).parent / "assets" / "lab_room.xml"
 
 ALGORITHM = "cql-sac"
 GAMMA = 0.99
 TAU = 0.005
 NET_ARCH = [256, 256]
 CQL_RANDOM_ACTIONS = 10
-
-
-def scene_action_bounds() -> tuple[np.ndarray, np.ndarray]:
-    """Each actuator's control range from the scene robots and the test track use."""
-    ranges = mujoco.MjModel.from_xml_path(str(LAB_XML)).actuator_ctrlrange[:ACT_DIM]
-    return ranges[:, 0].astype(np.float32), ranges[:, 1].astype(np.float32)
 
 
 class OfflineSpaces(gym.Env):
@@ -67,8 +60,7 @@ class OfflineSpaces(gym.Env):
     def __init__(self):
         super().__init__()
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, (OBS_DIM,), dtype=np.float32)
-        low, high = scene_action_bounds()
-        self.action_space = gym.spaces.Box(low, high, dtype=np.float32)
+        self.action_space = gym.spaces.Box(SCALED_ACTION_LOW, SCALED_ACTION_HIGH, (ACT_DIM,), dtype=np.float32)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -171,12 +163,11 @@ def make_model(args, buffer_size: int) -> SAC:
 def fill_replay_buffer(model: SAC, data: dict) -> int:
     """Load transitions into the model's ReplayBuffer (n_envs=1) in one copy.
 
-    Fleet actions are joint targets in each actuator's range; SAC's buffer
-    holds them scaled to [-1, 1] like the actions its own actor produces.
+    Fleet experience records the joint targets robots applied; the buffer
+    holds the residual action that produces them (clipped to the residual range).
     """
     buffer = model.replay_buffer
-    space = model.action_space
-    actions = np.clip(data["actions"], space.low, space.high)
+    actions = from_joint_targets(data["actions"])
     n = len(data["rewards"])
     buffer.observations[:n, 0] = data["observations"]
     buffer.next_observations[:n, 0] = data["next_observations"]
@@ -344,7 +335,7 @@ def run(args) -> int:
     )
     duration = time.time() - start
     model.save(str(output_dir / "policy"))
-    write_policy_meta(output_dir)  # obs version, checked before execution
+    write_policy_meta(output_dir, RESIDUAL)  # obs + action version, checked before execution
 
     results = {
         **base,

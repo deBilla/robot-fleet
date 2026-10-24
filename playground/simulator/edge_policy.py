@@ -31,7 +31,8 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from policy_meta import META_FILENAME, incompatibility, read_policy_meta
+from policy_action import ABSOLUTE, to_joint_targets
+from policy_meta import META_FILENAME, action_version, incompatibility, read_policy_meta
 
 log = logging.getLogger(__name__)
 
@@ -96,19 +97,42 @@ class NormalizedPolicy:
 
 
 class IncompatiblePolicy(RuntimeError):
-    """The policy was trained on a different observation layout; never execute it."""
+    """The policy was trained on another observation layout or maps actions in an unknown way; never execute it."""
+
+
+class JointTargetPolicy:
+    """Wraps a policy so predict() returns joint position targets (policy_action.py)."""
+
+    def __init__(self, policy, action_version: int):
+        self._policy = policy
+        self._action_version = action_version
+
+    def predict(self, obs, deterministic=False):
+        action, state = self._policy.predict(obs, deterministic=deterministic)
+        return to_joint_targets(action, self._action_version), state
 
 
 def load_policy_file(policy_path: str):
     """Load an SB3 policy (PPO, then SAC, then TQC) + its normalizer if present.
 
     Refuses policies whose policy_meta.json doesn't match this build's
-    observation version (the robot then stays on cloud inference).
+    observation version (the robot then stays on cloud inference). The loaded
+    policy returns joint targets whatever its action version.
     """
-    reason = incompatibility(read_policy_meta(Path(policy_path).parent / META_FILENAME))
+    meta = read_policy_meta(Path(policy_path).parent / META_FILENAME)
+    reason = incompatibility(meta)
     if reason:
         raise IncompatiblePolicy(f"{policy_path}: {reason}")
 
+    policy = _load_sb3(policy_path)
+    normalize = load_obs_normalizer(str(Path(policy_path).parent / NORMALIZER_FILE))
+    if normalize:
+        policy = NormalizedPolicy(policy, normalize)
+    version = action_version(meta)
+    return policy if version == ABSOLUTE else JointTargetPolicy(policy, version)
+
+
+def _load_sb3(policy_path: str):
     from stable_baselines3 import PPO, SAC
 
     loaders = [PPO.load, SAC.load]
@@ -118,17 +142,12 @@ def load_policy_file(policy_path: str):
     except ImportError:
         pass
     errors = []
-    model = None
     for load in loaders:
         try:
-            model = load(policy_path)
-            break
+            return load(policy_path)
         except Exception as exc:  # try the next algorithm
             errors.append(str(exc))
-    if model is None:
-        raise RuntimeError(f"load policy {policy_path}: {'; '.join(errors)}")
-    normalize = load_obs_normalizer(str(Path(policy_path).parent / NORMALIZER_FILE))
-    return NormalizedPolicy(model, normalize) if normalize else model
+    raise RuntimeError(f"load policy {policy_path}: {'; '.join(errors)}")
 
 
 def make_s3_fetch_and_load(endpoint: str, access_key: str, secret_key: str,
@@ -218,8 +237,8 @@ class EdgePolicyManager:
         policy, policy_lock = entry
         with policy_lock:  # SB3 predict() isn't safe to call concurrently
             act, _ = policy.predict(np.asarray(obs, dtype=np.float32), deterministic=True)
-        # No [-1, 1] clip: actions span each joint's control range (e.g. knee to
-        # -2.8 rad); the physics step clips to the actuator limits like training.
+        # Loaded policies return joint targets (JointTargetPolicy for residual
+        # ones); the physics step clips to the actuator limits like training.
         return np.asarray(act, dtype=np.float32)
 
     def refresh_once(self) -> None:

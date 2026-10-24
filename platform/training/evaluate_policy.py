@@ -17,7 +17,7 @@ from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
-from policy_meta import META_FILENAME, incompatibility, read_policy_meta
+from policy_meta import META_FILENAME, action_version, incompatibility, read_policy_meta
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
@@ -55,6 +55,14 @@ def check_compatible(model_path: str) -> None:
     reason = incompatibility(read_policy_meta(Path(model_path).parent / META_FILENAME))
     if reason:
         raise IncompatiblePolicy(f"{model_path}: {reason}")
+
+
+def make_test_track(model_path: str, env_id: str) -> DummyVecEnv:
+    """The test track, mapping actions to joints the way this policy was trained to."""
+    from fleetos_env import register_fleetos_env
+    register_fleetos_env()
+    version = action_version(read_policy_meta(Path(model_path).parent / META_FILENAME))
+    return DummyVecEnv([lambda: gym.make(env_id, action_version=version)])
 
 
 def download_model(args) -> str:
@@ -105,10 +113,7 @@ def evaluate(args):
     model, algorithm = load_policy(model_path)
     print(f"[eval] Loaded {algorithm} policy")
 
-    from fleetos_env import register_fleetos_env
-    register_fleetos_env()
-    env_id = args.env_id
-    env = DummyVecEnv([lambda: gym.make(env_id)])
+    env = make_test_track(model_path, args.env_id)
 
     # Online PPO runs ship a normalizer; offline models train on raw
     # observations (like inference) and have none.

@@ -54,5 +54,15 @@ def test_refuses_policies_without_matching_obs_version(tmp_path):
     model.write_bytes(b"zip")
     with pytest.raises(ep.IncompatiblePolicy, match="policy_meta.json"):
         ep.check_compatible(str(model))
-    pm.write_policy_meta(tmp_path)
+    pm.write_policy_meta(tmp_path, 2)
     ep.check_compatible(str(model))  # compatible: no exception
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_test_track_runs_a_policy_in_its_own_action_version(tmp_path, version):
+    import policy_meta as pm
+    model = tmp_path / "policy.zip"
+    model.write_bytes(b"zip")
+    pm.write_policy_meta(tmp_path, version)
+    env = ep.make_test_track(str(model), "FleetOS-Humanoid-v2")
+    assert env.envs[0].unwrapped.action_version == version

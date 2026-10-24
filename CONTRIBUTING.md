@@ -88,6 +88,7 @@ misbehaves on the fleet. These files exist as byte-identical copies in
 - `observation.py` (the 86-dim policy input)
 - `locomotion_reward.py` (reward, fall rule, episode length)
 - `policy_meta.py`
+- `policy_action.py` (how policy outputs become joint targets)
 - `assets/lab_room.xml` (the scene)
 
 Change both copies in the same commit; `platform/training/test_parity.py` fails CI otherwise.

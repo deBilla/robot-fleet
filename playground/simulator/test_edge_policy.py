@@ -251,8 +251,9 @@ def test_load_policy_file_real_ppo_with_vecnormalize(tmp_path):
     model = sb3.PPO("MlpPolicy", venv, n_steps=8, batch_size=8)
     model.save(tmp_path / "policy")
     venv.save(str(tmp_path / ep.NORMALIZER_FILE))
+    import policy_action
     import policy_meta
-    policy_meta.write_policy_meta(tmp_path)  # trainers ship this next to policy.zip
+    policy_meta.write_policy_meta(tmp_path, policy_action.ABSOLUTE)  # trainers ship this next to policy.zip
 
     policy = ep.load_policy_file(str(tmp_path / "policy"))
     assert isinstance(policy, ep.NormalizedPolicy)
@@ -297,4 +298,35 @@ def test_load_refuses_policy_without_matching_obs_version(tmp_path):
 
     (tmp_path / pm.META_FILENAME).write_text('{"obs_version": 2}')
     with pytest.raises(ep.IncompatiblePolicy, match="version 2"):
+        ep.load_policy_file(str(tmp_path / "policy.zip"))
+
+
+def test_residual_policy_outputs_joint_targets_around_the_standing_pose():
+    import policy_action as pa
+    policy = ep.JointTargetPolicy(FakePolicy(1.0), pa.RESIDUAL)
+    targets, _ = policy.predict(np.zeros(ep.OBS_DIM), deterministic=True)
+    assert targets == pytest.approx(pa.STAND_POSE + pa.RESIDUAL_SCALE)
+
+
+def test_load_policy_file_maps_actions_by_the_policys_action_version(tmp_path, monkeypatch):
+    # The manager and simulator only ever see joint targets, whatever the policy outputs.
+    import policy_action as pa
+    import policy_meta as pm
+    monkeypatch.setattr(ep, "_load_sb3", lambda path: FakePolicy(1.0))
+    (tmp_path / "policy.zip").write_bytes(b"zip")
+
+    pm.write_policy_meta(tmp_path, pa.RESIDUAL)
+    targets, _ = ep.load_policy_file(str(tmp_path / "policy.zip")).predict(np.zeros(ep.OBS_DIM))
+    assert targets == pytest.approx(pa.STAND_POSE + pa.RESIDUAL_SCALE)
+
+    pm.write_policy_meta(tmp_path, pa.ABSOLUTE)
+    targets, _ = ep.load_policy_file(str(tmp_path / "policy.zip")).predict(np.zeros(ep.OBS_DIM))
+    assert targets == pytest.approx(np.ones(ep.ACTION_DIM))
+
+
+def test_load_refuses_unknown_action_version(tmp_path):
+    from observation import OBS_VERSION
+    (tmp_path / "policy.zip").write_bytes(b"zip")
+    (tmp_path / "policy_meta.json").write_text(f'{{"obs_version": {OBS_VERSION}, "action_version": 99}}')
+    with pytest.raises(ep.IncompatiblePolicy, match="action version 99"):
         ep.load_policy_file(str(tmp_path / "policy.zip"))
