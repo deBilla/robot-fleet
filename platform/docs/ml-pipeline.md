@@ -172,6 +172,14 @@ Simulator (50 Hz) → gRPC Telemetry (+ training context) → Ingestion → Kafk
 | Training infra | Argo WorkflowTemplates or Kubeflow Trainer TrainJobs (runtime `fleetos-sb3`, 2–4 CPU / 3–6 Gi); CPU-only on local k3s | `deploy/k8s/workflows/`, `internal/kubeflow/` |
 | Hyperparameter search | Katib Experiment (TPE default) over learning_rate, cql_alpha, batch_size; each trial = offline training on the snapshot + 5 test-track episodes → best params train the final model | `internal/kubeflow/`, `train_offline.py` flags |
 
+Manual online training (`train_locomotion.py`) and test-track evaluation (`evaluate_policy.py`) accept
+`--domain-randomisation`. Per episode it randomises sliding friction ±30% (one factor for every
+surface), link mass and rotational inertia ±10%, action latency 10–50 ms per command (a queue applies
+each command exactly when its delay elapses, so none are dropped), and per-group observation noise
+(the 4-dim one-hot task code is left exact). It is opt-in and off by default, so evaluation and the
+promotion gate stay deterministic; passing the flag to `evaluate_policy.py` measures robustness across
+`SCENARIO_PRESETS` and records it in `eval_results.json`.
+
 ### 4.2 Training Paradigms
 
 | Paradigm | Scripts | Data Source | When to Use |
@@ -244,7 +252,7 @@ This stage is the least covered. It focuses on understanding *why* the policy be
 |-----------|---------|----------|
 | **Failure analysis** | Understand why and when robots fall | Cluster fall episodes by joint torque / velocity patterns at failure timestep. Identify common failure modes (e.g., knee lock-up, asymmetric gait). |
 | **Reward decomposition** | Detect reward hacking or imbalanced components | Log forward_velocity, alive_bonus, control_cost separately during eval. Plot component trajectories per episode. |
-| **Sim-to-real gap analysis** | Assess transferability to real hardware | Add domain randomisation to `fleetos_env.py` (friction ±30%, mass ±10%, action latency 10–50 ms). Evaluate policy robustness. |
+| **Sim-to-real gap analysis** | Assess transferability to real hardware | Implemented (opt-in): `--domain-randomisation` in `train_locomotion.py`/`evaluate_policy.py` randomises friction ±30%, mass/inertia ±10%, action latency 10–50 ms and per-group observation noise each episode; measure robustness across `SCENARIO_PRESETS`. |
 | **Policy interpretability** | Identify which observations drive decisions | SHAP values or gradient saliency on the MLP. Rank the 376 observation dims by importance. Prune unused dims. |
 | **Adversarial robustness** | Test policy under perturbation | Inject Gaussian noise into observations during eval. Measure graceful degradation vs. catastrophic failure. |
 | **Energy efficiency** | Minimise actuator usage for same gait | Add energy term to reward. Generate Pareto front: forward speed vs. energy consumption. |

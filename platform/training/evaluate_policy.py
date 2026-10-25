@@ -15,6 +15,7 @@ import os
 import time
 from pathlib import Path
 
+import gymnasium as gym
 import numpy as np
 from policy_meta import META_FILENAME, action_version, incompatibility, read_policy_meta
 from stable_baselines3 import PPO, SAC
@@ -59,12 +60,12 @@ def check_compatible(model_path: str) -> None:
 def make_test_track(model_path: str, env_id: str,
                     domain_randomisation: bool = False) -> DummyVecEnv:
     """The test track, mapping actions to joints the way this policy was trained to."""
-    from fleetos_env import FleetOSHumanoidEnv, register_fleetos_env
+    from fleetos_env import register_fleetos_env
     register_fleetos_env()
     version = action_version(read_policy_meta(Path(model_path).parent / META_FILENAME))
     return DummyVecEnv(
-        [lambda: FleetOSHumanoidEnv(action_version=version,
-                                    domain_randomisation=domain_randomisation)]
+        [lambda: gym.make(env_id, action_version=version,
+                          domain_randomisation=domain_randomisation)]
     )
 
 

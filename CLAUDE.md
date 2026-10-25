@@ -114,6 +114,8 @@ cd platform && make k3s-down      # colima stop (MinIO PVC survives)
 cd platform/training
 python3 train_locomotion.py --job-id demo --timesteps 50000 --n-envs 8 --n-steps 512 \
   --env-id FleetOS-Humanoid-v2 --s3-endpoint localhost:9000
+# Add --domain-randomisation to randomise friction/mass/inertia, action latency
+# and observation noise per episode (off by default; evaluation stays deterministic).
 ```
 
 ## Code Organization

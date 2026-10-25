@@ -45,7 +45,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv, VecNormalize
 
 # Register our custom environment
-from fleetos_env import FleetOSHumanoidEnv, register_fleetos_env
+from fleetos_env import register_fleetos_env
 register_fleetos_env()
 
 
@@ -116,12 +116,12 @@ FINAL_EVAL_EPISODES = 20
 
 
 def make_env(env_id: str, domain_randomisation: bool = False):
-    """Create environment — supports both custom and stock Gymnasium."""
+    """Create an env by Gymnasium id; kwargs pass through the registration."""
     def _init():
         if env_id not in gym.registry:  # fresh worker process
             register_fleetos_env()
         return Monitor(
-            FleetOSHumanoidEnv(domain_randomisation=domain_randomisation)
+            gym.make(env_id, domain_randomisation=domain_randomisation)
         )  # episode reward/length for training metrics
     return _init
 
