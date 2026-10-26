@@ -128,9 +128,13 @@ class FleetOSHumanoidEnv(gym.Env):
 
         # Action latency queue: every issued command is scheduled at
         # (issue substep + drawn latency) and applied exactly when its substep
-        # comes. Nothing is dropped, including the first command after reset.
+        # comes. Delivery is in issue order: a command is never scheduled
+        # before the one issued before it, so it can be late but never
+        # overtakes a newer command (real links deliver commands in order).
+        # Nothing is dropped, including the first command after reset.
         self._command_queue = []  # (apply_at_substep, sequence, joint_targets)
         self._command_seq = 0
+        self._last_apply_at = -1
         self._substep_clock = 0
         self._active_command = self._standing_targets()
 
@@ -184,9 +188,12 @@ class FleetOSHumanoidEnv(gym.Env):
     def _apply_due_commands(self):
         """Apply every queued command whose substep has arrived.
 
-        Commands are applied in time order; if two are due at once the later
-        issued one wins. Due commands leave the queue, so a command the policy
-        issued earlier but with a longer latency still reaches the joints.
+        Commands are applied in issue order (`step` schedules each one no
+        earlier than the previous), so a command issued earlier can never
+        take over after a newer one. If several are due at once the later
+        issued one wins. Due commands leave the queue, so a command the
+        policy issued earlier but with a longer latency still reaches the
+        joints — just before, never after, the commands that followed it.
         """
         due = [c for c in self._command_queue if c[0] <= self._substep_clock]
         if not due:
@@ -234,6 +241,7 @@ class FleetOSHumanoidEnv(gym.Env):
         # the standing pose until the first (also delayed) command arrives.
         self._command_queue = []
         self._command_seq = 0
+        self._last_apply_at = -1
         self._substep_clock = 0
         self._active_command = self._standing_targets()
 
@@ -248,11 +256,17 @@ class FleetOSHumanoidEnv(gym.Env):
         # Queue the new command to take effect after its drawn latency. Every
         # command is delayed, including the first after a reset, and each is
         # applied at exactly its scheduled substep rather than being dropped.
+        # Delivery is in issue order: a command with a long latency must not
+        # overtake a newer one with a short latency, so its effect time is
+        # clamped to at least one substep after the previous command's. A
+        # command can therefore arrive late, never early or out of order.
         targets = np.clip(to_joint_targets(action, self.action_version),
                           self._ctrl_low, self._ctrl_high)
         latency = self._draw_latency_substeps() if self._domain_randomisation else 0
+        apply_at = max(self._substep_clock + latency, self._last_apply_at + 1)
+        self._last_apply_at = apply_at
         self._command_queue.append(
-            (self._substep_clock + latency, self._command_seq, targets)
+            (apply_at, self._command_seq, targets)
         )
         self._command_seq += 1
 

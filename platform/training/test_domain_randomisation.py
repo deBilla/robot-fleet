@@ -182,6 +182,65 @@ def test_latency_queue_applies_every_command_at_its_drawn_delay(monkeypatch):
         assert observed[apply_at - 1][dim] != pytest.approx(commands[i])
 
 
+def test_latency_queue_delivers_commands_in_issue_order(monkeypatch):
+    """A long-delay command never overtakes a newer short-delay one.
+
+    The reviewer's case: command 0 is issued at substep 0 and draws the
+    longest latency (17), due at 17; command 1 is issued at substep 7 and
+    draws the shortest (3), due at 10. Applying them by due time would run
+    command 1 from 10 to 17 and then jump *back* to command 0 — out-of-order
+    delivery, which real robot links never do. With in-order delivery each
+    command still arrives exactly once, and ctrl never reverts to an older
+    command after a newer one has taken over.
+    """
+    env = FleetOSHumanoidEnv(domain_randomisation=True, action_version=pa.ABSOLUTE)
+    # Command 0 draws the longest latency, due at 0+17=17; command 1 is
+    # issued at 7 with the shortest (3), due at 10 without the clamp. The
+    # old code would run command 1 from 10 and then jump back to command 0
+    # at 17. Command 2's long delay is likewise clamped behind command 1.
+    latencies = [17, 3, 11, 2]
+    draws = iter(latencies)
+    monkeypatch.setattr(env, "_draw_latency_substeps", lambda: next(draws))
+
+    observed = {}  # substep clock -> ctrl (joint targets)
+    real_mj_step = fe.mujoco.mj_step
+
+    def recording_step(model, data):
+        observed[env._substep_clock] = data.ctrl[:NUM_ACTUATORS].copy()
+        real_mj_step(model, data)
+
+    monkeypatch.setattr(fe.mujoco, "mj_step", recording_step)
+
+    env.reset(seed=0)
+    dim = 11
+    commands = []
+    for i in range(len(latencies)):
+        action = np.full(NUM_ACTUATORS, -0.5 + 0.01 * i, dtype=np.float32)
+        env.step(action)
+        commands.append(float(np.clip(-0.5 + 0.01 * i, env._ctrl_low[dim], env._ctrl_high[dim])))
+
+    # Flatten the ctrl history over the whole run.
+    clocks = sorted(observed)
+    history = [observed[c][dim] for c in clocks]
+
+    # Every command reaches the joints at some point (none dropped).
+    for i, cmd in enumerate(commands):
+        assert any(h == pytest.approx(cmd) for h in history), f"command {i} never applied"
+
+    # Once a command has taken over, an older one must not come back: the
+    # index of the active command is non-decreasing across the run.
+    def active_index(h):
+        matches = [i for i, cmd in enumerate(commands) if h == pytest.approx(cmd)]
+        return matches[0] if matches else -1  # -1: still the standing pose
+
+    indices = [active_index(history[0])] + [
+        active_index(h) for h in history[1:]
+    ]
+    # Drop the leading standing-pose substeps (-1), then require order.
+    indices = [i for i in indices if i != -1]
+    assert indices == sorted(indices), f"out-of-order delivery: {indices}"
+
+
 def test_drawn_latency_is_in_range():
     env = FleetOSHumanoidEnv(domain_randomisation=True)
     env.reset(seed=0)
