@@ -57,12 +57,16 @@ def check_compatible(model_path: str) -> None:
         raise IncompatiblePolicy(f"{model_path}: {reason}")
 
 
-def make_test_track(model_path: str, env_id: str) -> DummyVecEnv:
+def make_test_track(model_path: str, env_id: str,
+                    domain_randomisation: bool = False) -> DummyVecEnv:
     """The test track, mapping actions to joints the way this policy was trained to."""
     from fleetos_env import register_fleetos_env
     register_fleetos_env()
     version = action_version(read_policy_meta(Path(model_path).parent / META_FILENAME))
-    return DummyVecEnv([lambda: gym.make(env_id, action_version=version)])
+    return DummyVecEnv(
+        [lambda: gym.make(env_id, action_version=version,
+                          domain_randomisation=domain_randomisation)]
+    )
 
 
 def download_model(args) -> str:
@@ -113,7 +117,8 @@ def evaluate(args):
     model, algorithm = load_policy(model_path)
     print(f"[eval] Loaded {algorithm} policy")
 
-    env = make_test_track(model_path, args.env_id)
+    env = make_test_track(model_path, args.env_id,
+                          domain_randomisation=args.domain_randomisation)
 
     # Online PPO runs ship a normalizer; offline models train on raw
     # observations (like inference) and have none.
@@ -156,6 +161,7 @@ def evaluate(args):
         "mean_episode_length": round(float(np.mean(lengths)), 1),
         "eval_duration_seconds": round(eval_duration, 1),
         "scenario_results": scenario_results,
+        "domain_randomisation": args.domain_randomisation,
     }
     # Summary map for the platform's eval callback (EvalCallbackPayload.results).
     results["results"] = {
@@ -260,6 +266,12 @@ if __name__ == "__main__":
     parser.add_argument("--s3-access-key", default=os.getenv("S3_ACCESS_KEY", "fleetos"))
     parser.add_argument("--s3-secret-key", default=os.getenv("S3_SECRET_KEY", "fleetos123"))
     parser.add_argument("--callback-url", default=os.getenv("EVAL_CALLBACK_URL", ""))
+    parser.add_argument(
+        "--domain-randomisation",
+        action="store_true",
+        default=False,
+        help="Evaluate with per-episode domain randomisation on (measures sim-to-real robustness)",
+    )
     args = parser.parse_args()
 
     evaluate(args)

@@ -115,20 +115,25 @@ TRAIN_SEED = 0
 FINAL_EVAL_EPISODES = 20
 
 
-def make_env(env_id: str):
-    """Create environment — supports both custom and stock Gymnasium."""
+def make_env(env_id: str, domain_randomisation: bool = False):
+    """Create an env by Gymnasium id; kwargs pass through the registration."""
     def _init():
         if env_id not in gym.registry:  # fresh worker process
             register_fleetos_env()
-        return Monitor(gym.make(env_id))  # episode reward/length for training metrics
+        return Monitor(
+            gym.make(env_id, domain_randomisation=domain_randomisation)
+        )  # episode reward/length for training metrics
     return _init
 
 
-def build_vec_env(env_id: str, n_envs: int) -> VecEnv:
+def build_vec_env(env_id: str, n_envs: int,
+                  domain_randomisation: bool = False) -> VecEnv:
     """n_envs copies of the env: in-process for one, one worker process each
     otherwise (MuJoCo steps on the CPU, so parallel envs scale with cores).
     Workers get different seeds so their episodes don't run in lockstep."""
-    factories = [make_env(env_id) for _ in range(n_envs)]
+    factories = [
+        make_env(env_id, domain_randomisation=domain_randomisation) for _ in range(n_envs)
+    ]
     env = DummyVecEnv(factories) if n_envs == 1 else SubprocVecEnv(factories)
     env.seed(TRAIN_SEED)
     return env
@@ -163,7 +168,9 @@ def train(args):
 
     # Create vectorized environment with normalization
     print(f"[train] Parallel envs: {args.n_envs}")
-    env = build_vec_env(env_id, args.n_envs)
+    env = build_vec_env(
+        env_id, args.n_envs, domain_randomisation=args.domain_randomisation
+    )
     env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
     # Initialize model: from base or from scratch
@@ -452,6 +459,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--ent-coef", type=float, default=0.0)
+    parser.add_argument(
+        "--domain-randomisation",
+        action="store_true",
+        default=False,
+        help="Train with per-episode domain randomisation (sim-to-real robustness)",
+    )
     return parser
 
 
